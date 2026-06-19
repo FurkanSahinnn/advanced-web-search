@@ -12,7 +12,25 @@ sources, embeddings, claims and reports — lives in a single local SQLite file.
 
 ---
 
+## Screenshots
+
+**Home — ask a research question, choose search depth and report language(s)**
+
+![Advanced Web Search — home page](assets/screenshots/01-home.png)
+
+**Live research — the agent trace, topic graph and scored sources stream in real time**
+
+![Advanced Web Search — live research run](assets/screenshots/02-research.png)
+
+**Cited report — a synthesized answer with inline [n] citations and a consensus summary**
+
+![Advanced Web Search — completed report](assets/screenshots/03-report.png)
+
+---
+
 ## Table of contents
+
+- [Screenshots](#screenshots)
 
 1. [Why this project exists](#1-why-this-project-exists)
 2. [Project structure](#2-project-structure)

@@ -14,7 +14,25 @@ SQLite dosyasında durur.
 
 ---
 
+## Ekran görüntüleri
+
+**Ana sayfa — araştırma sorunuzu yazın, arama derinliğini ve rapor dil(ler)ini seçin**
+
+![Advanced Web Search — ana sayfa](assets/screenshots/01-home.png)
+
+**Canlı araştırma — ajan izi, konu grafiği ve puanlanmış kaynaklar gerçek zamanlı akar**
+
+![Advanced Web Search — canlı araştırma](assets/screenshots/02-research.png)
+
+**Atıflı rapor — satır içi [n] atıfları ve bir uzlaşı özeti içeren sentezlenmiş yanıt**
+
+![Advanced Web Search — tamamlanmış rapor](assets/screenshots/03-report.png)
+
+---
+
 ## İçindekiler
+
+- [Ekran görüntüleri](#ekran-görüntüleri)
 
 1. [Bu proje neden var](#1-bu-proje-neden-var)
 2. [Proje yapısı](#2-proje-yapısı)

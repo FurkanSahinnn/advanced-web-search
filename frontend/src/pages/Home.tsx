@@ -6,7 +6,6 @@ import {
   Clock,
   Award,
   Trash2,
-  Sparkles,
 } from "lucide-react";
 import { api, ApiError } from "../lib/api";
 import { useLang } from "../lib/i18n";
@@ -96,9 +95,6 @@ export function Home() {
       <NoModelBanner />
       <div className="mx-auto max-w-3xl px-4 py-10">
         <div className="mb-6 text-center">
-        <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-[var(--color-accent)] text-[var(--color-accent-fg)]">
-          <Sparkles size={24} />
-        </div>
         <h1 className="text-balance text-3xl font-bold tracking-tight text-[var(--color-fg)] sm:text-4xl">
           {t("home.heroTitle")}
         </h1>
