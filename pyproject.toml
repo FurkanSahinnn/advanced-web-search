@@ -1,0 +1,75 @@
+[project]
+name = "advanced-web-search"
+version = "0.1.0"
+description = "Advanced Web Search — local-first, login-free multi-agent deep research workbench for professional researchers."
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+license = { text = "MIT" }
+authors = [{ name = "Advanced Web Search" }]
+
+dependencies = [
+    # --- Web framework / server ---
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "sse-starlette>=2.1",
+    "python-multipart>=0.0.12",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.6",
+
+    # --- Multi-agent orchestration ---
+    "langgraph>=0.2.60",
+    "langgraph-checkpoint-sqlite>=2.0.1",
+    "langchain-core>=0.3.25",
+
+    # --- LLM provider abstraction (cloud + local Ollama) ---
+    "litellm>=1.55",
+
+    # --- Local embeddings + reranking (ONNX by default, no torch needed) ---
+    "fastembed>=0.4.2",
+
+    # --- Vector store (single-file, lives inside the SQLite db) ---
+    "sqlite-vec>=0.1.6",
+
+    # --- HTTP / retries / parsing ---
+    "httpx>=0.27",
+    "tenacity>=9.0",
+    "ddgs>=6.0",            # keyless web search (DuckDuckGo)
+    "trafilatura>=1.12",   # robust full-text article extraction
+    "feedparser>=6.0",     # arXiv Atom feeds
+    "selectolax>=0.3.21",  # fast HTML parsing fallback
+    "pypdf>=5.1",          # OA PDF -> text for academic full-text grounding
+
+    # --- System / misc ---
+    "psutil>=6.1",         # RAM detection for local-model recommendation
+    "python-dateutil>=2.9",
+    "orjson>=3.10",
+]
+
+[project.optional-dependencies]
+# Heavier, higher-quality torch-based embeddings/rerankers (optional upgrade).
+torch = [
+    "sentence-transformers>=3.3",
+    "torch>=2.5",
+]
+dev = [
+    "ruff>=0.8",
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+]
+
+[project.scripts]
+advanced-web-search = "advanced_web_search.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["backend/advanced_web_search"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
