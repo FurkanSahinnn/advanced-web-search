@@ -123,6 +123,25 @@ export function Research() {
     stream.status === "running" || stream.status === "connecting";
   const hasReport = !!report || stream.tokens.length > 0;
 
+  // Source ids actually cited in the displayed report: scan its body for [n]
+  // markers and resolve each via the report's [n]->source mapping. This is the
+  // faithful "cited in the report" set (vs. all collected/kept sources) and
+  // drives the SourceTable badge/filter + the header count. Empty for older
+  // runs (no mapping) or before the report lands.
+  const citedSourceIds = useMemo<Set<number>>(() => {
+    const set = new Set<number>();
+    const refsList = report?.references;
+    const md = report?.markdown ?? "";
+    if (!refsList || refsList.length === 0 || !md) return set;
+    const re = /\[(\d+)\]/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(md)) !== null) {
+      const sid = refsList[parseInt(m[1], 10) - 1];
+      if (sid != null) set.add(sid);
+    }
+    return set;
+  }, [report?.markdown, report?.references]);
+
   // Reopening a finished project loses the live SSE trace (the per-node events
   // are never persisted), so rebuild an equivalent completed trace from the
   // run's stored artifacts. Used whenever the live stream carries no node
@@ -356,10 +375,15 @@ export function Research() {
           <div className="border-b border-[var(--color-border)] px-3 py-2 text-xs font-semibold uppercase tracking-wide text-[var(--color-muted)]">
             {t("research.sources")}{" "}
             <span className="text-[var(--color-faint)]">
-              ({mergedSources.length})
+              {citedSourceIds.size > 0
+                ? `(${citedSourceIds.size} ${t("source.citedShort")} · ${mergedSources.length})`
+                : `(${mergedSources.length})`}
             </span>
           </div>
-          <SourceTable sources={mergedSources} />
+          <SourceTable
+            sources={mergedSources}
+            citedSourceIds={citedSourceIds}
+          />
         </aside>
       </div>
 

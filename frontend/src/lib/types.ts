@@ -102,6 +102,9 @@ export interface ReportOut {
   consensus_summary: string | null;
   comprehensiveness: number | null;
   certainty: number | null;
+  // Source ids in [n] citation order (index 0 == inline marker [1]). Lets the
+  // UI resolve a citation marker to the exact source. Empty for older runs.
+  references?: number[];
   created_at: string;
 }
 

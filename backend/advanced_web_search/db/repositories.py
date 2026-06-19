@@ -334,13 +334,19 @@ def get_claims(run_id: int) -> list[dict]:
 
 def save_report(run_id: int, markdown: str, *, language: str = "en", ord: int = 0,
                 consensus_summary: str = "", comprehensiveness: float = 0.0,
-                certainty: float = 0.0) -> int:
+                certainty: float = 0.0, ref_ids: Optional[list[int]] = None) -> int:
+    # `ref_ids` is the [n]->source-id mapping (n == index+1) persisted as JSON so
+    # clients/exports can resolve inline citation markers exactly. None for older
+    # callers/runs that didn't compute it.
+    refs_json = json.dumps(ref_ids, ensure_ascii=False) if ref_ids is not None else None
+
     def _do(c: sqlite3.Connection) -> int:
         cur = c.execute(
             """INSERT INTO reports(run_id, markdown, language, ord, consensus_summary,
-                                   comprehensiveness, certainty)
-               VALUES(?,?,?,?,?,?,?)""",
-            (run_id, markdown, language, ord, consensus_summary, comprehensiveness, certainty),
+                                   comprehensiveness, certainty, ref_ids)
+               VALUES(?,?,?,?,?,?,?,?)""",
+            (run_id, markdown, language, ord, consensus_summary, comprehensiveness,
+             certainty, refs_json),
         )
         return int(cur.lastrowid)
 

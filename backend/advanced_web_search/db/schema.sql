@@ -132,6 +132,7 @@ CREATE TABLE IF NOT EXISTS reports (
     consensus_summary TEXT,
     comprehensiveness REAL,                          -- 0-1 coverage indicator
     certainty         REAL,                          -- 0-1 confidence indicator
+    ref_ids           TEXT,                          -- JSON array of source ids in [n] citation order
     created_at        TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS ix_reports_run ON reports(run_id);

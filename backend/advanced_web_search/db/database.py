@@ -165,6 +165,14 @@ def _apply_migrations(conn) -> None:
         conn.execute("ALTER TABLE reports ADD COLUMN language TEXT NOT NULL DEFAULT 'en'")
     if "ord" not in rcols:
         conn.execute("ALTER TABLE reports ADD COLUMN ord INTEGER NOT NULL DEFAULT 0")
+    # `ref_ids`: JSON array of source ids in [n] citation order (index+1 == n),
+    # i.e. the numbered source list the synthesizer handed the LLM. Lets the UI
+    # resolve an inline [n] marker to the exact source instead of guessing by
+    # position, and lets exports number the bibliography to match the body.
+    # (Column is named `ref_ids`, not `references`, because REFERENCES is a SQL
+    # keyword.)
+    if "ref_ids" not in rcols:
+        conn.execute("ALTER TABLE reports ADD COLUMN ref_ids TEXT")
     conn.execute("CREATE INDEX IF NOT EXISTS ix_reports_run_lang ON reports(run_id, language)")
 
 

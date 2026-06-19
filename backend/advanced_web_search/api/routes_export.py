@@ -44,8 +44,19 @@ async def export_run(
     # sources only and are language-independent, so they ignore ``lang``.
     doc_lang = lang if fmt in ("markdown", "html") else None
 
-    sources = await asyncio.to_thread(repositories.get_sources, run_id, kept_only)
     report = await asyncio.to_thread(repositories.get_report, run_id, doc_lang)
+
+    # Document formats (markdown/html) number their bibliography to match the
+    # inline [n] markers, so every numbered source must be resolvable. When the
+    # report carries a [n]->source mapping, fetch ALL sources (ignoring
+    # kept_only) so a dropped-but-cited source still lands in the list at its
+    # number. Reference formats and older (unmapped) reports keep kept_only.
+    use_all_sources = fmt in ("markdown", "html") and bool(
+        export_mod.report_references(report)
+    )
+    sources = await asyncio.to_thread(
+        repositories.get_sources, run_id, False if use_all_sources else kept_only
+    )
 
     project: Optional[dict] = None
     run = await asyncio.to_thread(repositories.get_run, run_id)

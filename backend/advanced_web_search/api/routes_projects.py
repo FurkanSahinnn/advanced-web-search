@@ -152,7 +152,17 @@ def report_out(row: dict) -> ReportOut:
 
     `language`/`ord` are columns added with the multi-language report feature;
     older rows (NULL) fall back to the historical single-language defaults.
+    `ref_ids` (the [n]->source-id mapping) is parsed into `references`; older
+    rows without it yield an empty list.
     """
+    raw_refs = _parse_json(row.get("ref_ids"), [])
+    references: list[int] = []
+    if isinstance(raw_refs, list):
+        for x in raw_refs:
+            try:
+                references.append(int(x))
+            except (TypeError, ValueError):
+                continue
     return ReportOut(
         id=int(row["id"]),
         run_id=int(row["run_id"]),
@@ -162,6 +172,7 @@ def report_out(row: dict) -> ReportOut:
         consensus_summary=row.get("consensus_summary"),
         comprehensiveness=row.get("comprehensiveness"),
         certainty=row.get("certainty"),
+        references=references,
         created_at=str(row.get("created_at") or ""),
     )
 

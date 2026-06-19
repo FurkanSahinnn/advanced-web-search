@@ -300,6 +300,15 @@ async def synthesizer(state: dict) -> dict:
         cited_scores = list(final_by_id.values())
     certainty = round(sum(cited_scores) / len(cited_scores), 4) if cited_scores else 0.0
 
+    # The numbered source list (n == index+1) is what the LLM cited by [n];
+    # persist it as the report's [n]->source-id mapping so the UI can resolve a
+    # marker to the exact source and exports can number the bibliography to
+    # match the body. Same for every language (the markers are kept unchanged).
+    # `numbered` is already built skipping id-less sources, so this never holds a
+    # None; the guard keeps that invariant explicit (a None would silently shift
+    # every later marker by one once the list is densified downstream).
+    ref_ids = [sid for s in numbered if (sid := s.get("id")) is not None]
+
     # --- save + emit one report per language (primary first; ord=0 = primary) ---
     primary_consensus = ""
     for i, lang in enumerate(languages):
@@ -313,6 +322,7 @@ async def synthesizer(state: dict) -> dict:
                 language=lang, ord=i,
                 consensus_summary=consensus,
                 comprehensiveness=comprehensiveness, certainty=certainty,
+                ref_ids=ref_ids,
             )
         except Exception as exc:
             errors.append(f"synthesizer: save_report[{lang}] failed: {exc}")
@@ -327,6 +337,7 @@ async def synthesizer(state: dict) -> dict:
                      "language": lang, "ord": i, "is_primary": i == 0,
                      "consensus_summary": consensus,
                      "comprehensiveness": comprehensiveness, "certainty": certainty,
+                     "references": ref_ids,
                      "created_at": created_at})
 
     out: dict = {

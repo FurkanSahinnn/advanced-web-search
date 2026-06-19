@@ -48,15 +48,24 @@ function Cell({ v }: { v: number }) {
   );
 }
 
+const EMPTY_CITED: ReadonlySet<number> = new Set();
+
 export function SourceTable({
   sources,
+  citedSourceIds,
   className,
 }: {
   sources: SourceOut[];
+  // Source ids actually cited in the report (resolved from inline [n] markers).
+  // Enables the "cited in report" badge + filter; empty/omitted hides them.
+  citedSourceIds?: ReadonlySet<number>;
   className?: string;
 }) {
   const { t } = useLang();
+  const cited = citedSourceIds ?? EMPTY_CITED;
+  const hasCited = cited.size > 0;
   const [keptOnly, setKeptOnly] = useState(false);
+  const [citedOnly, setCitedOnly] = useState(false);
   const [kind, setKind] = useState("all");
   const [sort, setSort] = useState<SortKey>("match_score");
   const [asc, setAsc] = useState(false);
@@ -68,9 +77,14 @@ export function SourceTable({
     return [...set].sort();
   }, [sources]);
 
+  // A stale "cited only" filter must not blank the table once cited info is
+  // unavailable (e.g. switching to a report/run without a mapping).
+  const citedOnlyActive = citedOnly && hasCited;
+
   const rows = useMemo(() => {
     let r = sources.slice();
     if (keptOnly) r = r.filter((s) => s.score?.kept);
+    if (citedOnlyActive) r = r.filter((s) => cited.has(s.id));
     if (kind !== "all") r = r.filter((s) => s.kind === kind);
     r.sort((a, b) => {
       const va = val(a, sort);
@@ -82,7 +96,7 @@ export function SourceTable({
       return asc ? cmp : -cmp;
     });
     return r;
-  }, [sources, keptOnly, kind, sort, asc]);
+  }, [sources, keptOnly, citedOnlyActive, cited, kind, sort, asc]);
 
   const toggleSort = (k: SortKey) => {
     if (sort === k) setAsc((a) => !a);
@@ -133,6 +147,17 @@ export function SourceTable({
           />
           {t("source.keptOnly")}
         </label>
+        {hasCited && (
+          <label className="flex cursor-pointer items-center gap-1.5 text-xs text-[var(--color-muted)]">
+            <input
+              type="checkbox"
+              checked={citedOnly}
+              onChange={(e) => setCitedOnly(e.target.checked)}
+              className="h-4 w-4 accent-[var(--color-accent)]"
+            />
+            {t("source.citedOnly")}
+          </label>
+        )}
         <div className="w-40">
           <Select
             value={kind}
@@ -184,8 +209,18 @@ export function SourceTable({
                       )}
                     </td>
                     <td className="max-w-0 px-2 py-2">
-                      <div className="truncate text-xs text-[var(--color-fg)]">
-                        {s.title ?? s.canonical_id}
+                      <div className="flex items-center gap-1.5">
+                        {cited.has(s.id) && (
+                          <span
+                            title={t("source.citedTip")}
+                            className="shrink-0 rounded bg-[var(--color-accent-soft)] px-1 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-[var(--color-accent)]"
+                          >
+                            {t("source.cited")}
+                          </span>
+                        )}
+                        <span className="truncate text-xs text-[var(--color-fg)]">
+                          {s.title ?? s.canonical_id}
+                        </span>
                       </div>
                       <div className="truncate text-[10px] text-[var(--color-faint)]">
                         {[s.provider, s.kind].filter(Boolean).join(" · ")}

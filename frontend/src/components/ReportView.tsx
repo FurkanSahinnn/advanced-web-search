@@ -63,11 +63,14 @@ function renderWithCitations(
   while ((m = re.exec(text)) !== null) {
     if (m.index > last) parts.push(text.slice(last, m.index));
     const n = parseInt(m[1], 10);
-    const sourceId = sourceByIndex.get(n) ?? n;
+    // Resolve to the exact source; if the marker has no mapping (e.g. a bracketed
+    // number that isn't a real citation, or an old report whose heuristic falls
+    // short), the click is a no-op rather than scrolling to an arbitrary row.
+    const sourceId = sourceByIndex.get(n);
     parts.push(
       <sup key={`c-${key++}`}>
         <button
-          onClick={() => onCite(sourceId)}
+          onClick={() => sourceId != null && onCite(sourceId)}
           className="mx-0.5 rounded bg-[var(--color-accent-soft)] px-1 text-[10px] font-semibold text-[var(--color-accent)] hover:bg-[var(--color-accent)] hover:text-[var(--color-accent-fg)]"
           title={`#${n}`}
         >
@@ -140,13 +143,21 @@ export function ReportView({
 }) {
   const { t } = useLang();
 
-  // Map [n] -> source id. Heuristic: order sources by id; [n] is 1-based index.
+  // Map [n] -> source id. Prefer the report's persisted [n]->source mapping
+  // (`references`, where index i holds the source for marker [i+1]) so a marker
+  // resolves to the EXACT source. Older runs without it fall back to the legacy
+  // heuristic: order sources by id and treat [n] as the 1-based index.
+  const refs = report?.references;
   const sourceByIndex = useCallback(() => {
-    const ordered = [...sources].sort((a, b) => a.id - b.id);
     const map = new Map<number, number>();
+    if (refs && refs.length > 0) {
+      refs.forEach((sid, i) => map.set(i + 1, sid));
+      return map;
+    }
+    const ordered = [...sources].sort((a, b) => a.id - b.id);
     ordered.forEach((s, i) => map.set(i + 1, s.id));
     return map;
-  }, [sources])();
+  }, [sources, refs])();
 
   const onCite = useCallback((id: number) => highlightSource(id), []);
 

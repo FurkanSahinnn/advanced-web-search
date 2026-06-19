@@ -143,6 +143,9 @@ class ReportOut(BaseModel):
     consensus_summary: Optional[str] = None
     comprehensiveness: Optional[float] = None
     certainty: Optional[float] = None
+    # Source ids in [n] citation order (index+1 == the inline [n] marker). Lets a
+    # client resolve a citation marker to the exact source. Empty for older runs.
+    references: list[int] = Field(default_factory=list)
     created_at: str
 
 

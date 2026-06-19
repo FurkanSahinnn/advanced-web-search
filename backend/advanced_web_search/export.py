@@ -356,11 +356,70 @@ def _reference_line(src: dict) -> str:
 
 
 # --------------------------------------------------------------------------- #
+# Reference numbering ([n] <-> source)
+# --------------------------------------------------------------------------- #
+
+def report_references(report: Optional[dict]) -> list[int]:
+    """Parse a report row's persisted [n]->source-id mapping (the `ref_ids` JSON
+    column) into a list of source ids in citation order (index 0 == marker [1]).
+
+    Returns [] for older reports that predate the mapping, signalling callers to
+    fall back to their prior (score-ordered) behaviour.
+    """
+    raw = (report or {}).get("ref_ids")
+    if raw is None:
+        return []
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except Exception:
+            return []
+    if not isinstance(raw, (list, tuple)):
+        return []
+    out: list[int] = []
+    for x in raw:
+        try:
+            out.append(int(x))
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def _numbered_refs(report: Optional[dict], sources: list[dict]) -> list[tuple[int, dict]]:
+    """Pair each source with its true citation number n, in [n] order.
+
+    When the report carries a [n]->source mapping, every entry keeps its real n
+    (so the printed list lines up with the inline [n] markers in the body, even
+    if a numbered source is absent from `sources` — that number is simply
+    skipped rather than shifting the rest). Without a mapping (older reports) we
+    fall back to numbering the given sources 1..k in their incoming order.
+    """
+    refs = report_references(report)
+    if not refs:
+        return list(enumerate(sources or [], 1))
+    by_id: dict[Any, dict] = {}
+    for s in sources or []:
+        sid = s.get("id")
+        if sid is not None and sid not in by_id:
+            by_id[sid] = s
+    out: list[tuple[int, dict]] = []
+    for n, sid in enumerate(refs, 1):
+        s = by_id.get(sid)
+        if s is not None:
+            out.append((n, s))
+    return out
+
+
+# --------------------------------------------------------------------------- #
 # Markdown report
 # --------------------------------------------------------------------------- #
 
 def report_to_markdown(report: Optional[dict], sources: list[dict], project: dict) -> str:
-    """Project title + root query, the report markdown, then a references list."""
+    """Project title + root query, the report markdown, then a references list.
+
+    The references are numbered to match the inline [n] markers in the body when
+    the report carries a [n]->source mapping (see ``_numbered_refs``).
+    """
     project = project or {}
     sources = sources or []
     title = _s(project.get("title")) or _s(project.get("root_query")) or "Advanced Web Search Report"
@@ -378,9 +437,10 @@ def report_to_markdown(report: Optional[dict], sources: list[dict], project: dic
 
     out.append("## Kaynaklar / References")
     out.append("")
-    if sources:
-        for i, s in enumerate(sources, 1):
-            out.append(f"{i}. {_reference_line(s)}")
+    numbered = _numbered_refs(report, sources)
+    if numbered:
+        for n, s in numbered:
+            out.append(f"{n}. {_reference_line(s)}")
     else:
         out.append("_—_")
     out.append("")
@@ -536,9 +596,12 @@ def to_html(
     if root_query and root_query != title:
         subtitle = f'<p class="aws-subtitle">{_html.escape(root_query)}</p>'
 
-    if sources:
+    numbered = _numbered_refs(report, sources)
+    if numbered:
+        # `value="n"` pins each entry to its true citation number so the printed
+        # list lines up with the inline [n] markers (and survives any skips).
         refs = "\n".join(
-            f"<li>{_md_inline(_reference_line(s))}</li>" for s in sources
+            f'<li value="{n}">{_md_inline(_reference_line(s))}</li>' for n, s in numbered
         )
         refs_html = f"<ol>{refs}</ol>"
     else:
