@@ -498,14 +498,52 @@ def _md_inline(text: str) -> str:
     return esc
 
 
-def _md_to_html(md: str) -> str:
-    """Minimal markdown -> HTML: headings, lists, paragraphs, links, hr.
+_TABLE_SEP_CELL = re.compile(r"^:?-{1,}:?$")
 
-    Not a full converter — just enough for a clean printable document.
+
+def _split_row(s: str) -> list[str]:
+    """Split a `| a | b |` markdown table row into trimmed cell strings."""
+    s = s.strip()
+    if s.startswith("|"):
+        s = s[1:]
+    if s.endswith("|"):
+        s = s[:-1]
+    return [c.strip() for c in s.split("|")]
+
+
+def _is_table_sep(line: str) -> bool:
+    """True for a GFM header-separator row like `|---|:--:|` (dashes + colons)."""
+    s = line.strip()
+    if "|" not in s or "-" not in s:
+        return False
+    cells = [c for c in _split_row(s) if c != ""]
+    return bool(cells) and all(_TABLE_SEP_CELL.match(c) for c in cells)
+
+
+def _render_table(header: list[str], rows: list[list[str]]) -> str:
+    n = len(header)
+    head = "".join(f"<th>{_md_inline(c)}</th>" for c in header)
+    body = []
+    for r in rows:
+        cells = (r + [""] * n)[:n]  # pad/truncate ragged rows to the header width
+        body.append("<tr>" + "".join(f"<td>{_md_inline(c)}</td>" for c in cells) + "</tr>")
+    return (f'<table class="aws-table"><thead><tr>{head}</tr></thead>'
+            f'<tbody>{"".join(body)}</tbody></table>')
+
+
+def _md_to_html(md: str) -> str:
+    """Minimal markdown -> HTML: headings, lists, GFM tables, blockquotes,
+    paragraphs, links, hr.
+
+    Not a full converter — just enough for a clean printable document. Tables and
+    blockquotes are handled so structured report content survives the PDF/HTML
+    export instead of leaking as raw `| … |` pipe syntax.
     """
     md = _s(md)
     if not md:
         return ""
+    lines = md.splitlines()
+    total = len(lines)
     html_lines: list[str] = []
     list_open: Optional[str] = None  # 'ul' | 'ol'
     para: list[str] = []
@@ -521,13 +559,40 @@ def _md_to_html(md: str) -> str:
             html_lines.append(f"</{list_open}>")
             list_open = None
 
-    for raw_line in md.splitlines():
-        line = raw_line.rstrip()
+    i = 0
+    while i < total:
+        line = lines[i].rstrip()
         stripped = line.strip()
 
         if not stripped:
             flush_para()
             close_list()
+            i += 1
+            continue
+
+        # GFM table: a header row immediately followed by a separator row.
+        if "|" in stripped and i + 1 < total and _is_table_sep(lines[i + 1]):
+            flush_para()
+            close_list()
+            header = _split_row(stripped)
+            i += 2
+            rows: list[list[str]] = []
+            while i < total and lines[i].strip() and "|" in lines[i]:
+                rows.append(_split_row(lines[i].strip()))
+                i += 1
+            html_lines.append(_render_table(header, rows))
+            continue
+
+        # Blockquote: one or more consecutive '>' lines.
+        if stripped.startswith(">"):
+            flush_para()
+            close_list()
+            quote: list[str] = []
+            while i < total and lines[i].strip().startswith(">"):
+                quote.append(re.sub(r"^\s*>\s?", "", lines[i]).strip())
+                i += 1
+            text = " ".join(q for q in quote if q)
+            html_lines.append(f"<blockquote>{_md_inline(text)}</blockquote>")
             continue
 
         h = re.match(r"^(#{1,6})\s+(.*)$", stripped)
@@ -536,12 +601,14 @@ def _md_to_html(md: str) -> str:
             close_list()
             level = len(h.group(1))
             html_lines.append(f"<h{level}>{_md_inline(h.group(2))}</h{level}>")
+            i += 1
             continue
 
         if re.match(r"^(-{3,}|\*{3,}|_{3,})$", stripped):
             flush_para()
             close_list()
             html_lines.append("<hr/>")
+            i += 1
             continue
 
         ol = re.match(r"^\d+[.)]\s+(.*)$", stripped)
@@ -555,11 +622,13 @@ def _md_to_html(md: str) -> str:
                 list_open = want
             content = (ol or ul).group(1)
             html_lines.append(f"<li>{_md_inline(content)}</li>")
+            i += 1
             continue
 
         # plain paragraph text (accumulate)
         close_list()
         para.append(stripped)
+        i += 1
 
     flush_para()
     close_list()
@@ -588,6 +657,10 @@ li { margin: .25rem 0; }
 hr { border: 0; border-top: 1px solid #ddd; margin: 2rem 0; }
 blockquote { margin: 1rem 0; padding: .25rem 0 .25rem 1rem; border-left: 3px solid #ccc; color: #555; font-style: italic; }
 blockquote.aws-disagree { border-left-color: #b0413e; color: #7a2e2c; }
+table.aws-table { border-collapse: collapse; width: 100%; margin: 1.2rem 0; font-size: .9rem; }
+table.aws-table th, table.aws-table td { border: 1px solid #ccc; padding: .4rem .6rem; text-align: left; vertical-align: top; }
+table.aws-table th { background: #f3f3f3; font-weight: bold; }
+table.aws-table tr:nth-child(even) td { background: #fafafa; }
 .aws-subtitle { color: #555; font-style: italic; margin: 0 0 1.5rem; }
 .aws-grounding { color: #14507a; font-size: .85rem; margin: 0 0 1rem; }
 .aws-refs { margin-top: 2.5rem; }

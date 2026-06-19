@@ -202,7 +202,10 @@ class Settings(BaseSettings):
     local_model: str | None = None  # explicit override; else auto-picked by RAM
 
     # --- embeddings / reranking (ONNX via fastembed by default) ---
-    embed_model: str = "BAAI/bge-m3"
+    # 1024-dim multilingual (TR/EN), fastembed-supported. bge-m3 was dropped by
+    # newer fastembed; the embedder also falls back to a supported model if the
+    # configured one can't load, so vector search never silently turns off.
+    embed_model: str = "intfloat/multilingual-e5-large"
     embed_dim: int = 1024
     rerank_model: str = "Xenova/bge-reranker-base"  # fastembed-supported multilingual
     use_torch_models: bool = False  # opt-in to sentence-transformers/torch path
