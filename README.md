@@ -65,7 +65,7 @@ re-check their own citations, and keep none of it on your machine.
 | **Steerable** | A human-in-the-loop **approval gate** lets you edit the nested sub-topic plan *before* expensive retrieval runs. |
 | **Self-checking** | An **adversarial verifier** checks each inline citation against the source's *actual text* (embedding prefilter + LLM entailment) and labels it *supported / partial / unsupported / unverifiable* — kept separate from link-liveness — sending unsupported claims back for revision. |
 | **Conflict-aware & traceable** | The report surfaces where sources **disagree** (not only where they agree), warns when evidence concentrates in a single **domain** (echo-chamber), and exposes a full **research trail** of every query issued and every source kept or dropped. |
-| **Multilingual** | Local `bge-m3` embeddings with strong **Turkish** support; bilingual TR/EN UI; reports can be generated in **one or several languages in parallel**. |
+| **Multilingual** | Local `multilingual-e5-large` embeddings with strong **Turkish** support; bilingual TR/EN UI; reports can be generated in **one or several languages in parallel**. |
 | **Persistent** | Projects, runs, sources, claims and reports are saved in SQLite and revisitable — nothing is thrown away after a query. |
 | **One command, Windows-first** | `./start.ps1` (or `./start.sh`) installs, builds and launches. No curl-pipe-bash, no wizard. |
 
@@ -113,7 +113,7 @@ advanced-web-search/
 │       │   └── fulltext.py         #   OA PDF → text extraction
 │       ├── retrieval/              # dedup + sqlite-vec vector store
 │       ├── scoring/                # weighted source ranker (the score formula)
-│       ├── embeddings/             # bge-m3 embedder + bge-reranker (fastembed ONNX)
+│       ├── embeddings/             # multilingual-e5-large embedder + bge-reranker (fastembed ONNX)
 │       ├── llm/                    # provider routing (Ollama/cloud) + RAM-based model pick
 │       ├── db/                     # SQLite schema, migrations, repositories
 │       ├── models/                 # Pydantic request/response schemas
@@ -169,7 +169,7 @@ flowchart TD
   above. It checkpoints to SQLite (so a run can pause at the approval gate and resume), loops for
   gap-filling and citation repair, and streams every step to the UI.
 - **Retrieval & scoring (`sources/`, `retrieval/`, `scoring/`, `embeddings/`)** — providers fan
-  out in parallel; results are de-duplicated, embedded and reranked locally with `bge-m3`, fused
+  out in parallel; results are de-duplicated, embedded and reranked locally with `multilingual-e5-large`, fused
   with keyword search via Reciprocal Rank Fusion, then scored by the transparent weighted formula.
 - **LLM (`llm/`)** — a hybrid router: it uses a local Ollama model by default and automatically
   upgrades to a cloud provider the moment an API key is present.
@@ -295,7 +295,7 @@ Open **http://localhost:8787**. To run it detached, use `docker compose up --bui
 `docker compose down` (your data is preserved — see below).
 
 **What's persisted.** All state — the SQLite database, the downloaded embedding-model cache
-(`bge-m3`, a few hundred MB pulled on the **first** run, so that run is slower) and the HTTP cache —
+(`multilingual-e5-large`, ~2 GB pulled on the **first** run, so that run is slower) and the HTTP cache —
 lives in the named Docker volume `aws-data` (mounted at `/data`). It survives `docker compose down`
 and image rebuilds. Remove it with `docker compose down -v` only if you want a clean slate.
 
@@ -320,6 +320,27 @@ LLM. Two options:
 > **Linux**, first give the directory to the container's user, which runs as UID `10001`:
 > `sudo chown -R 10001:10001 ./data` (otherwise the unprivileged process can't write the DB). On
 > Docker Desktop (Windows/macOS) this isn't needed.
+
+### Easy install — auto-updating, no building
+
+For non-developers who just want to **run** the app and always stay current. This path pulls a
+prebuilt image from GitHub Container Registry, so there's **nothing to clone and nothing to build**;
+a small [Watchtower](https://containrrr.dev/watchtower/) helper keeps it updated automatically every
+time a new version is published.
+
+**Prerequisite:** Docker with Compose v2. You only need the **`docker-compose.user.yml`** file
+([download it here](https://github.com/FurkanSahinnn/advanced-web-search/blob/main/docker-compose.user.yml)).
+
+```bash
+# Put docker-compose.user.yml in an empty folder
+# (optional: a .env with API keys next to it), then:
+docker compose -f docker-compose.user.yml up -d
+```
+
+Open **http://localhost:8787**. When a new version ships, Watchtower pulls it and restarts the app on
+its own — your data (the `aws-data` volume) and your `.env` are never touched, and the database
+upgrades itself on startup. To update immediately instead of waiting on the hourly check:
+`docker compose -f docker-compose.user.yml pull && docker compose -f docker-compose.user.yml up -d`.
 
 ---
 
@@ -351,7 +372,7 @@ A `.env` file is **completely optional** — Advanced Web Search runs with zero 
 | API | FastAPI + `sse-starlette` (JSON under `/api`, SSE trace stream) |
 | Orchestration | LangGraph (multi-node agent graph, SQLite checkpointer, HITL interrupt) |
 | LLM | LiteLLM — hybrid routing between local Ollama and cloud providers |
-| Embeddings / rerank | `fastembed` ONNX: `bge-m3` embeddings + `bge-reranker` (multilingual) |
+| Embeddings / rerank | `fastembed` ONNX: `multilingual-e5-large` embeddings + `bge-reranker` (multilingual) |
 | Storage / retrieval | SQLite + `sqlite-vec` + FTS5, fused with RRF |
 
 **Source-scoring formula** (weights normalized to sum to 1):

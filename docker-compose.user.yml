@@ -1,0 +1,61 @@
+# Advanced Web Search — auto-updating install (NO source code, NO building).
+#
+# For people who just want to RUN the app and always stay up to date. It pulls a
+# prebuilt image from GitHub Container Registry and a small "Watchtower" helper
+# keeps it updated automatically whenever a new version is published.
+#
+#   1) Put THIS file in an empty folder. (Optional: a `.env` next to it with API keys.)
+#   2) Run once:   docker compose -f docker-compose.user.yml up -d
+#   3) Open:       http://localhost:8787
+#
+# That's it. When the maintainer publishes an update, Watchtower pulls it and
+# restarts the app on its own — your data (the `aws-data` volume) and your `.env`
+# are never touched, and the database upgrades itself on startup.
+#
+# To update immediately instead of waiting:  docker compose -f docker-compose.user.yml pull && \
+#   docker compose -f docker-compose.user.yml up -d
+# To stop:  docker compose -f docker-compose.user.yml down   (named volumes are kept)
+
+services:
+  app:
+    image: ghcr.io/furkansahinnn/advanced-web-search:latest
+    container_name: advanced-web-search
+    ports:
+      - "8787:8787"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      AWSEARCH_HOST: "0.0.0.0"
+      AWSEARCH_PORT: "8787"
+      AWSEARCH_DATA_DIR: /data
+      AWSEARCH_OLLAMA_BASE_URL: ${AWSEARCH_OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      # Persists the SQLite db + model cache + HTTP cache across updates.
+      - aws-data:/data
+    restart: unless-stopped
+    labels:
+      # Only containers with this label are auto-updated by Watchtower below.
+      com.centurylinklabs.watchtower.enable: "true"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8787/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+
+  # Polls GHCR and, when a newer image is published, pulls it and recreates the
+  # app container — fully hands-off auto-update. It only touches containers
+  # labelled above (--label-enable), and removes the old image (--cleanup).
+  watchtower:
+    image: containrrr/watchtower:latest
+    container_name: advanced-web-search-watchtower
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    command: --label-enable --cleanup --interval 3600 # check hourly; tune as you like
+
+volumes:
+  aws-data:

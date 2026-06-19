@@ -67,7 +67,7 @@ atıflarını nadiren yeniden denetler ve hiçbirini sizin makinenizde tutmaz.
 | **Yönlendirilebilir** | İnsan-döngüde **onay kapısı**, pahalı arama başlamadan *önce* iç içe alt-konu planını düzenlemenize izin verir. |
 | **Kendini denetleyen** | **Çelişkili (adversarial) doğrulayıcı**, her satır-içi atfı kaynağın *gerçek metniyle* karşılaştırır (embedding ön-elemesi + LLM entailment) ve *destekleniyor / kısmen / desteklenmiyor / doğrulanamaz* olarak etiketler — bağlantı canlılığından ayrı tutulur — desteksiz iddialar revizyona geri gönderilir. |
 | **Çelişkiye duyarlı & izlenebilir** | Rapor, kaynakların yalnızca uzlaştığı değil **çeliştiği** yerleri de gösterir; kanıt tek bir **alan adında** yoğunlaşınca (eko-oda) uyarır; ve atılan her sorgunun, tutulan/elenen her kaynağın tam bir **araştırma izini** sunar. |
-| **Çok dilli** | Güçlü **Türkçe** desteğiyle yerel `bge-m3` embedding'leri; iki dilli TR/EN arayüz; raporlar **bir veya birden çok dilde paralel** üretilebilir. |
+| **Çok dilli** | Güçlü **Türkçe** desteğiyle yerel `multilingual-e5-large` embedding'leri; iki dilli TR/EN arayüz; raporlar **bir veya birden çok dilde paralel** üretilebilir. |
 | **Kalıcı** | Projeler, çalıştırmalar, kaynaklar, iddialar ve raporlar SQLite'ta saklanır ve tekrar açılabilir — bir sorgudan sonra hiçbir şey atılmaz. |
 | **Tek komut, Windows-öncelikli** | `./start.ps1` (veya `./start.sh`) kurar, derler ve başlatır. curl-pipe-bash yok, sihirbaz yok. |
 
@@ -115,7 +115,7 @@ advanced-web-search/
 │       │   └── fulltext.py         #   açık erişim PDF → metin çıkarımı
 │       ├── retrieval/              # tekilleştirme + sqlite-vec vektör deposu
 │       ├── scoring/                # ağırlıklı kaynak sıralayıcı (puan formülü)
-│       ├── embeddings/             # bge-m3 embedder + bge-reranker (fastembed ONNX)
+│       ├── embeddings/             # multilingual-e5-large embedder + bge-reranker (fastembed ONNX)
 │       ├── llm/                    # sağlayıcı yönlendirme (Ollama/bulut) + RAM'e göre model seçimi
 │       ├── db/                     # SQLite şeması, migration'lar, repository'ler
 │       ├── models/                 # Pydantic istek/yanıt şemaları
@@ -171,7 +171,7 @@ flowchart TD
   çalıştırır. SQLite'a checkpoint atar (çalıştırma onay kapısında duraklayıp devam edebilir),
   eksik tamamlama ve atıf onarımı için döngü kurar ve her adımı arayüze akıtır.
 - **Arama ve puanlama (`sources/`, `retrieval/`, `scoring/`, `embeddings/`)** — sağlayıcılar
-  paralel açılır; sonuçlar tekilleştirilir, yerel olarak `bge-m3` ile embed edilip yeniden
+  paralel açılır; sonuçlar tekilleştirilir, yerel olarak `multilingual-e5-large` ile embed edilip yeniden
   sıralanır, Reciprocal Rank Fusion ile anahtar-kelime aramasıyla birleştirilir ve şeffaf
   ağırlıklı formülle puanlanır.
 - **LLM (`llm/`)** — hibrit bir yönlendirici: varsayılan olarak yerel bir Ollama modeli kullanır ve
@@ -298,8 +298,8 @@ docker compose up --build   # imajı derle ve uygulamayı başlat
 **http://localhost:8787** adresini açın. Arka planda çalıştırmak için `docker compose up --build -d`
 kullanın; durdurmak için `docker compose down` (verileriniz korunur — aşağıya bakın).
 
-**Neler kalıcıdır.** Tüm durum — SQLite veritabanı, indirilen embedding-model önbelleği (`bge-m3`,
-**ilk** çalıştırmada çekilen birkaç yüz MB; bu nedenle ilk çalıştırma daha yavaştır) ve HTTP
+**Neler kalıcıdır.** Tüm durum — SQLite veritabanı, indirilen embedding-model önbelleği
+(`multilingual-e5-large`, **ilk** çalıştırmada çekilen ~2 GB; bu nedenle ilk çalıştırma daha yavaştır) ve HTTP
 önbelleği — `/data` altına bağlanan adlandırılmış `aws-data` Docker volume'unda durur.
 `docker compose down` ve imaj yeniden derlemelerinden sağ çıkar. Sıfırdan başlamak isterseniz
 yalnızca `docker compose down -v` ile silin.
@@ -326,6 +326,27 @@ için LLM gerekir. İki seçenek:
 > `app` volume'unu `- ./data:/data` olarak değiştirin. **Linux'ta** önce klasörü konteynerin
 > UID `10001` ile çalışan kullanıcısına verin: `sudo chown -R 10001:10001 ./data` (aksi halde
 > yetkisiz süreç veritabanını yazamaz). Docker Desktop'ta (Windows/macOS) buna gerek yoktur.
+
+### Kolay kurulum — otomatik güncellenen, derlemesiz
+
+Yalnızca uygulamayı **çalıştırmak** ve hep güncel kalmak isteyen, kod bilmeyen kullanıcılar için. Bu
+yol GitHub Container Registry'den **hazır bir imaj** çeker; yani **klonlanacak kaynak ya da derlenecek
+bir şey yoktur**. Küçük bir [Watchtower](https://containrrr.dev/watchtower/) yardımcısı, yeni bir sürüm
+yayınlandığında uygulamayı otomatik olarak günceller.
+
+**Ön koşul:** Compose v2 ile Docker. Yalnızca **`docker-compose.user.yml`** dosyasına ihtiyacınız var
+([buradan indirin](https://github.com/FurkanSahinnn/advanced-web-search/blob/main/docker-compose.user.yml)).
+
+```bash
+# docker-compose.user.yml dosyasını boş bir klasöre koyun
+# (isteğe bağlı: yanına API anahtarları içeren bir .env), sonra:
+docker compose -f docker-compose.user.yml up -d
+```
+
+**http://localhost:8787** adresini açın. Yeni bir sürüm çıktığında Watchtower onu çeker ve uygulamayı
+kendiliğinden yeniden başlatır — verileriniz (`aws-data` volume) ve `.env`'iniz hiç ellenmez, veritabanı
+açılışta kendini günceller. Saatlik kontrolü beklemeden hemen güncellemek için:
+`docker compose -f docker-compose.user.yml pull && docker compose -f docker-compose.user.yml up -d`.
 
 ---
 
@@ -358,7 +379,7 @@ için LLM gerekir. İki seçenek:
 | API | FastAPI + `sse-starlette` (`/api` altında JSON, SSE iz akışı) |
 | Orkestrasyon | LangGraph (çok-düğümlü ajan grafiği, SQLite checkpointer, HITL interrupt) |
 | LLM | LiteLLM — yerel Ollama ile bulut sağlayıcılar arasında hibrit yönlendirme |
-| Embedding / yeniden sıralama | `fastembed` ONNX: `bge-m3` embedding + `bge-reranker` (çok dilli) |
+| Embedding / yeniden sıralama | `fastembed` ONNX: `multilingual-e5-large` embedding + `bge-reranker` (çok dilli) |
 | Depolama / arama | SQLite + `sqlite-vec` + FTS5, RRF ile birleştirilmiş |
 
 **Kaynak-puanlama formülü** (ağırlıklar toplamı 1 olacak şekilde normalize edilir):
