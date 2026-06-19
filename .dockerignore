@@ -1,0 +1,64 @@
+# Keep the Docker build context small and free of secrets.
+# (data/ alone is ~1 GB of model cache + SQLite; node_modules is huge.)
+
+# --- VCS ---
+.git
+.gitignore
+
+# --- Node / frontend deps (reinstalled inside the build stage) ---
+**/node_modules
+
+# pnpm-workspace.yaml carries pnpm-10/11-only config (onlyBuiltDependencies, etc.)
+# with no `packages:` field; the single-project container build (pnpm 9) doesn't
+# need it and pnpm 9 would reject the missing `packages:` field. Keep it out.
+frontend/pnpm-workspace.yaml
+
+# --- Python caches / local envs ---
+**/__pycache__
+*.py[cod]
+*.egg-info
+.venv
+venv
+.pytest_cache
+.ruff_cache
+
+# --- App data & local caches (NEVER copy the 1 GB+ db/model cache) ---
+# Patterns are anchored with **/ so they also match nested copies such as a
+# stray backend/data/ (a bare `data` / `*.db` would only match the context root,
+# letting backend/data/lumina.db leak into the image via `COPY backend/`).
+**/data
+**/*.db
+**/*.db-wal
+**/*.db-shm
+**/.cache
+**/models_cache
+
+# --- Secrets: injected at runtime via compose env_file, never baked into a layer ---
+.env
+.env.*
+!.env.example
+
+# --- Locally built SPA (rebuilt fresh in the frontend stage) ---
+backend/advanced_web_search/web
+
+# --- Not needed inside the image ---
+docs
+brand
+assets
+scripts
+tests
+start.ps1
+start.sh
+
+# --- Editor / OS / agent state ---
+.claude
+.vscode
+.idea
+.DS_Store
+Thumbs.db
+*.log
+
+# --- Don't recurse into the Docker artifacts themselves ---
+Dockerfile
+.dockerignore
+docker-compose.yml

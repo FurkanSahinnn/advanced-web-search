@@ -37,6 +37,7 @@ SQLite dosyasında durur.
 1. [Bu proje neden var](#1-bu-proje-neden-var)
 2. [Proje yapısı](#2-proje-yapısı)
 3. [Kurulum ve hazırlık](#3-kurulum-ve-hazırlık)
+   - [Docker ile çalıştırma](#docker-ile-çalıştırma-dağıtım-için-önerilir)
 4. [Yapılandırma](#4-yapılandırma)
 5. [Mimari referansı](#5-mimari-referansı)
 6. [Lisans](#6-lisans)
@@ -133,6 +134,9 @@ advanced-web-search/
 ├── tests/                          # çevrimdışı uçtan-uca grafik testleri (deterministik sahteler)
 ├── brand/                          # logo / marka varlıkları
 ├── start.ps1 / start.sh            # tek-komut başlatıcılar
+├── Dockerfile                      # çok-aşamalı derleme (SPA + Python runtime)
+├── docker-compose.yml              # tek-komut konteyner dağıtımı
+├── .dockerignore                   # derleme bağlamını yalın tutar
 ├── pyproject.toml                  # Python paketi + bağımlılıklar
 └── .env.example                    # tüm (opsiyonel) yapılandırma anahtarları
 ```
@@ -179,6 +183,9 @@ flowchart TD
 
 ## 3. Kurulum ve hazırlık
 
+> **Sadece dağıtmak mı istiyorsunuz?** Doğrudan [Docker ile çalıştırma](#docker-ile-çalıştırma-dağıtım-için-önerilir)
+> bölümüne geçin — tek komut, makinede Python/Node kurmaya gerek yok.
+
 ### Ön koşullar
 
 - **Python 3.11–3.13** — gerekli (backend çalışma zamanı).
@@ -186,6 +193,8 @@ flowchart TD
   `backend/advanced_web_search/web/` bir kez oluştuktan sonra çalışma zamanında gerekmez.
 - **Ollama** — *opsiyonel*, tamamen çevrimdışı LLM için <https://ollama.com> adresinden kurun.
 - **API anahtarları** — *opsiyonel*; herhangi bir bulut anahtarı varsayılan modeli yükseltir.
+- **Docker** — *opsiyonel*; aşağıdaki adımların makinede Python ya da Node gerektirmeyen bir
+  alternatifi. Bkz. [Docker ile çalıştırma](#docker-ile-çalıştırma-dağıtım-için-önerilir).
 
 ### Adım 1 — Kodu alın
 
@@ -266,6 +275,56 @@ Geliştirme sırasında **http://localhost:5173** adresini açın.
 pip install -e ".[dev]"                   # ruff + pytest + pytest-asyncio
 pytest tests/ -q                          # deterministik, tamamen çevrimdışı (LLM/ağ yok)
 ```
+
+### Docker ile çalıştırma (dağıtım için önerilir)
+
+Makineye Python, Node ve pnpm kurmak istemiyorsanız, proje çok-aşamalı bir **Dockerfile** ve bir
+**docker-compose.yml** ile gelir. İmaj hem SPA'yı hem de Python backend'i derler, ardından tüm
+uygulamayı tek bir konteynerden **8787** portunda sunar.
+
+**Ön koşul:** Compose v2.24+ ile [Docker](https://docs.docker.com/get-docker/) (`docker compose version`).
+
+```bash
+git clone https://github.com/FurkanSahinnn/advanced-web-search.git
+cd advanced-web-search
+
+# (opsiyonel) API anahtarları / geçersiz kılmalar — dosya varsa otomatik okunur
+cp .env.example .env        # ardından .env'i düzenleyin
+
+docker compose up --build   # imajı derle ve uygulamayı başlat
+```
+
+**http://localhost:8787** adresini açın. Arka planda çalıştırmak için `docker compose up --build -d`
+kullanın; durdurmak için `docker compose down` (verileriniz korunur — aşağıya bakın).
+
+**Neler kalıcıdır.** Tüm durum — SQLite veritabanı, indirilen embedding-model önbelleği (`bge-m3`,
+**ilk** çalıştırmada çekilen birkaç yüz MB; bu nedenle ilk çalıştırma daha yavaştır) ve HTTP
+önbelleği — `/data` altına bağlanan adlandırılmış `aws-data` Docker volume'unda durur.
+`docker compose down` ve imaj yeniden derlemelerinden sağ çıkar. Sıfırdan başlamak isterseniz
+yalnızca `docker compose down -v` ile silin.
+
+**Bir LLM bağlama.** Uygulama web + akademik kaynaklara karşı anahtarsız çalışır, ancak bir rapor
+için LLM gerekir. İki seçenek:
+
+- **Bulut anahtarı (en basit):** `.env` içine ör. `ANTHROPIC_API_KEY=...` koyun ve
+  `docker compose up` çalıştırın — anahtar konteynere aktarılır ve model otomatik yükselir. Başka
+  bir ayar gerekmez.
+- **Yerel Ollama:**
+  - *Host üzerinde Ollama* — compose dosyası konteyneri zaten `http://host.docker.internal:11434`
+    adresine yönlendirir; host kurulumu doğrudan çalışır (`ollama pull qwen3:8b`).
+  - *Paketlenmiş Ollama konteyneri* — opsiyonel servisi başlatın ve içine bir model çekin:
+    ```bash
+    docker compose --profile ollama up --build -d
+    docker compose exec ollama ollama pull qwen3:8b
+    # ardından .env içinde AWSEARCH_OLLAMA_BASE_URL=http://ollama:11434 ayarlayıp yeniden başlatın
+    ```
+
+> **İpucu — mevcut yerel önbelleği yeniden kullanın.** Uygulamayı daha önce makinede çalıştırdıysanız,
+> adlandırılmış volume yerine yerel `./data` klasörünüzü bağlayabilirsiniz (böylece konteyner
+> halihazırda indirilmiş modelleri ve veritabanını yeniden kullanır): `docker-compose.yml` içindeki
+> `app` volume'unu `- ./data:/data` olarak değiştirin. **Linux'ta** önce klasörü konteynerin
+> UID `10001` ile çalışan kullanıcısına verin: `sudo chown -R 10001:10001 ./data` (aksi halde
+> yetkisiz süreç veritabanını yazamaz). Docker Desktop'ta (Windows/macOS) buna gerek yoktur.
 
 ---
 

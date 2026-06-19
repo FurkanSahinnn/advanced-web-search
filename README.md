@@ -35,6 +35,7 @@ sources, embeddings, claims and reports — lives in a single local SQLite file.
 1. [Why this project exists](#1-why-this-project-exists)
 2. [Project structure](#2-project-structure)
 3. [Installation & setup](#3-installation--setup)
+   - [Run with Docker](#run-with-docker-recommended-for-deployment)
 4. [Configuration](#4-configuration)
 5. [Architecture reference](#5-architecture-reference)
 6. [License](#6-license)
@@ -131,6 +132,9 @@ advanced-web-search/
 ├── tests/                          # offline end-to-end graph tests (deterministic fakes)
 ├── brand/                          # logo / brand assets
 ├── start.ps1 / start.sh            # one-command launchers
+├── Dockerfile                      # multi-stage build (SPA + Python runtime)
+├── docker-compose.yml              # one-command containerized deployment
+├── .dockerignore                   # keeps the build context lean
 ├── pyproject.toml                  # Python package + dependencies
 └── .env.example                    # all (optional) configuration keys
 ```
@@ -175,6 +179,9 @@ flowchart TD
 
 ## 3. Installation & setup
 
+> **Just want to deploy it?** Skip straight to [Run with Docker](#run-with-docker-recommended-for-deployment)
+> — one command, no Python/Node toolchain needed on the host.
+
 ### Prerequisites
 
 - **Python 3.11–3.13** — required (the backend runtime).
@@ -182,6 +189,8 @@ flowchart TD
   runtime once `backend/advanced_web_search/web/` exists.
 - **Ollama** — *optional*, install from <https://ollama.com> for a fully offline LLM.
 - **API keys** — *optional*; any cloud key auto-upgrades the default model.
+- **Docker** — *optional*; an alternative to the steps below that needs neither Python nor Node on
+  the host. See [Run with Docker](#run-with-docker-recommended-for-deployment).
 
 ### Step 1 — Get the code
 
@@ -262,6 +271,54 @@ Open **http://localhost:5173** while developing.
 pip install -e ".[dev]"                   # ruff + pytest + pytest-asyncio
 pytest tests/ -q                          # deterministic, fully offline (no LLM/network)
 ```
+
+### Run with Docker (recommended for deployment)
+
+If you'd rather not install Python, Node and pnpm on the host, the project ships a multi-stage
+**Dockerfile** and a **docker-compose.yml**. The image builds the SPA and the Python backend, then
+serves the whole app from one container on port **8787**.
+
+**Prerequisite:** [Docker](https://docs.docker.com/get-docker/) with Compose v2.24+ (`docker compose version`).
+
+```bash
+git clone https://github.com/FurkanSahinnn/advanced-web-search.git
+cd advanced-web-search
+
+# (optional) add API keys / overrides — the file is read automatically if present
+cp .env.example .env        # then edit .env
+
+docker compose up --build   # build the image and start the app
+```
+
+Open **http://localhost:8787**. To run it detached, use `docker compose up --build -d`; stop it with
+`docker compose down` (your data is preserved — see below).
+
+**What's persisted.** All state — the SQLite database, the downloaded embedding-model cache
+(`bge-m3`, a few hundred MB pulled on the **first** run, so that run is slower) and the HTTP cache —
+lives in the named Docker volume `aws-data` (mounted at `/data`). It survives `docker compose down`
+and image rebuilds. Remove it with `docker compose down -v` only if you want a clean slate.
+
+**Connecting an LLM.** The app runs key-free against web + academic sources, but a report needs an
+LLM. Two options:
+
+- **Cloud key (simplest):** put e.g. `ANTHROPIC_API_KEY=...` in `.env` and `docker compose up` — the
+  key is passed into the container and the model auto-upgrades. Nothing else to configure.
+- **Local Ollama:**
+  - *Ollama on the host* — the compose file already points the container at
+    `http://host.docker.internal:11434`, so a host install just works (`ollama pull qwen3:8b`).
+  - *Bundled Ollama container* — start the optional service and pull a model into it:
+    ```bash
+    docker compose --profile ollama up --build -d
+    docker compose exec ollama ollama pull qwen3:8b
+    # then set AWSEARCH_OLLAMA_BASE_URL=http://ollama:11434 in .env and re-up
+    ```
+
+> **Tip — reuse an existing local cache.** If you've already run the app natively, you can bind-mount
+> your local `./data` instead of the named volume (so the container reuses the already-downloaded
+> models and DB) by changing the `app` volume in `docker-compose.yml` to `- ./data:/data`. On
+> **Linux**, first give the directory to the container's user, which runs as UID `10001`:
+> `sudo chown -R 10001:10001 ./data` (otherwise the unprivileged process can't write the DB). On
+> Docker Desktop (Windows/macOS) this isn't needed.
 
 ---
 
