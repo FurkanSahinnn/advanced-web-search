@@ -156,8 +156,10 @@ async def synthesizer(state: dict) -> dict:
             "numbers, URLs and proper names unchanged.\n"
             "Structure it with markdown headings, address each sub-question, and "
             "synthesize across sources (do not just summarize each one). Mark every "
-            "claim with inline [n] citations. End with a short '## Consensus' section "
-            "(one paragraph) describing where the sources agree and disagree."
+            "claim with inline [n] citations. End with a short '## Consensus' section: "
+            "first summarize where the sources broadly AGREE, then explicitly call out "
+            "any points of DISAGREEMENT, contradiction, or notable uncertainty between "
+            "the sources (state that there are no major disagreements if that is the case)."
             f"{instr_block}"
         )
 
@@ -231,6 +233,15 @@ async def synthesizer(state: dict) -> dict:
     # map [n] -> source_id
     source_of_n: dict[int, Any] = {i + 1: s.get("id") for i, s in enumerate(numbered)}
     approved_ids = [st.get("id") for st in approved if st.get("id") is not None]
+
+    # This pass rebuilds claims from the current report. Clear any prior pass's
+    # claims (a re-synthesis via the fatal or entailment re-research loop) so the
+    # verifier's grounding share, its citation budget, and re-research targeting
+    # are computed over THIS report's claims only — not stale accumulated ones.
+    try:
+        await asyncio.to_thread(repositories.delete_claims, run_id)
+    except Exception as exc:
+        errors.append(f"synthesizer: delete_claims failed: {exc}")
 
     persisted_claims: list[dict] = []
     cited_source_ids: set[Any] = set()
@@ -309,18 +320,36 @@ async def synthesizer(state: dict) -> dict:
     # every later marker by one once the list is densified downstream).
     ref_ids = [sid for s in numbered if (sid := s.get("id")) is not None]
 
+    # --- distil consensus + disagreements per language (structured) ---
+    # One small JSON pass per language, run concurrently. This is robust to
+    # translated headings (a plain heading-scan misses non-English reports) and
+    # yields the conflict counterpart to the consensus. Falls back to a
+    # heading-scan inside the helper if a call fails.
+    cd_raw = await asyncio.gather(
+        *[_extract_consensus_disagreements(markdown_by_lang[lang], lang) for lang in languages],
+        return_exceptions=True,
+    )
+    # A failed extraction for one language must not lose the reports for the
+    # others (every markdown is already generated; only the summaries are at
+    # stake), so coerce any exception to an empty pair.
+    cd_pairs = [r if isinstance(r, tuple) else ("", "") for r in cd_raw]
+    cd_by_lang = dict(zip(languages, cd_pairs))
+
     # --- save + emit one report per language (primary first; ord=0 = primary) ---
     primary_consensus = ""
+    primary_disagreements = ""
     for i, lang in enumerate(languages):
         md = markdown_by_lang[lang]
-        consensus = _extract_consensus(md)
+        consensus, disagreements = cd_by_lang[lang]
         if i == 0:
             primary_consensus = consensus
+            primary_disagreements = disagreements
         try:
             report_id = await asyncio.to_thread(
                 repositories.save_report, run_id, md,
                 language=lang, ord=i,
                 consensus_summary=consensus,
+                disagreements=disagreements or None,
                 comprehensiveness=comprehensiveness, certainty=certainty,
                 ref_ids=ref_ids,
             )
@@ -336,6 +365,7 @@ async def synthesizer(state: dict) -> dict:
              report={"id": report_id, "run_id": run_id, "markdown": md,
                      "language": lang, "ord": i, "is_primary": i == 0,
                      "consensus_summary": consensus,
+                     "disagreements": disagreements,
                      "comprehensiveness": comprehensiveness, "certainty": certainty,
                      "references": ref_ids,
                      "created_at": created_at})
@@ -343,6 +373,7 @@ async def synthesizer(state: dict) -> dict:
     out: dict = {
         "report_markdown": report_markdown,
         "consensus_summary": primary_consensus,
+        "disagreements": primary_disagreements,
         "comprehensiveness": comprehensiveness,
         "certainty": certainty,
         "claims": persisted_claims,
@@ -351,6 +382,71 @@ async def synthesizer(state: dict) -> dict:
     if errors:
         out["errors"] = errors
     return out
+
+
+async def _extract_consensus_disagreements(markdown: str, lang_code: str) -> tuple[str, str]:
+    """Distil a report into (consensus, disagreements) summaries in its language.
+
+    A small structured LLM pass, so it is robust to translated section headings
+    (a plain heading-scan only finds an English 'Consensus' heading and misses
+    non-English reports). Returns two short strings in ``lang_code``. On any
+    failure it falls back to a heading-scan for the consensus and an empty
+    disagreements string, so a report always gets at least a best-effort value.
+    """
+    if not markdown:
+        return "", ""
+    lang = language_name(lang_code)
+    system = (
+        "You distil a research report into two short plain-text summaries. "
+        "Output strict JSON only — no prose, no code fences."
+    )
+    user = (
+        "From the report below, produce a JSON object with exactly two string fields:\n"
+        '  "consensus": 1-3 sentences on where the sources broadly AGREE.\n'
+        '  "disagreements": 1-3 sentences on where the sources CONFLICT, contradict '
+        "each other, or are notably uncertain. Use an empty string if there are no "
+        "meaningful disagreements — do NOT invent conflicts the report does not support.\n"
+        f"Write BOTH summaries in {lang}. Keep inline [n] citation markers where they help.\n\n"
+        f"REPORT:\n{markdown[:12000]}"
+    )
+    try:
+        # Output is 1-3 sentences per field; bound it so a misbehaving model
+        # can't run away (and to cap the extra latency this pass adds).
+        raw = await chat_json("synthesizer", [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ], max_tokens=400)
+    except Exception:
+        raw = None
+    consensus, disagreements = _coerce_cd(raw)
+    if not consensus:
+        consensus = _extract_consensus(markdown)
+    return consensus.strip(), disagreements.strip()
+
+
+def _coerce_cd(raw: Any) -> tuple[str, str]:
+    """Pull (consensus, disagreements) strings out of a loose JSON shape."""
+    obj: Any = raw
+    if isinstance(raw, str):
+        try:
+            obj = json.loads(raw)
+        except Exception:
+            return "", ""
+    if isinstance(obj, list):
+        obj = next((x for x in obj if isinstance(x, dict)), {})
+    if not isinstance(obj, dict):
+        return "", ""
+
+    def _pick(*keys: str) -> str:
+        for k in keys:
+            v = obj.get(k)
+            if isinstance(v, str) and v.strip():
+                return v.strip()
+        return ""
+
+    consensus = _pick("consensus", "agreement", "agreements", "agree")
+    disagreements = _pick("disagreements", "disagreement", "conflicts", "conflict", "uncertainty")
+    return consensus, disagreements
 
 
 def _extract_consensus(markdown: str) -> str:

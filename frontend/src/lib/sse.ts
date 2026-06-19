@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { streamUrl } from "./api";
 import type {
+  ReportGrounding,
   ReportOut,
   ResearchEvent,
+  RunQueryOut,
   ScoreBreakdown,
   SourceOut,
   SubtopicOut,
@@ -24,6 +26,7 @@ export interface RunStreamState {
   statusMessage: string | null;
   sources: Map<number, SourceOut>;
   subtopics: SubtopicOut[]; // tree
+  queries: RunQueryOut[]; // issued search queries (research trail)
   report: ReportOut | null;
   reports: Map<string, ReportOut>; // latest report per language code
   tokens: string; // accumulated synth text
@@ -84,6 +87,7 @@ export function useRunStream(runId: number | null): RunStreamState {
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [sources, setSources] = useState<Map<number, SourceOut>>(new Map());
   const [subtopics, setSubtopics] = useState<SubtopicOut[]>([]);
+  const [queries, setQueries] = useState<RunQueryOut[]>([]);
   const [report, setReport] = useState<ReportOut | null>(null);
   const [reports, setReports] = useState<Map<string, ReportOut>>(new Map());
   const [tokens, setTokens] = useState<string>("");
@@ -94,6 +98,9 @@ export function useRunStream(runId: number | null): RunStreamState {
   const [reopenKey, setReopenKey] = useState(0);
 
   const esRef = useRef<EventSource | null>(null);
+  // Monotonic negative ids for live query rows (SSE frames carry no DB id),
+  // guaranteed unique regardless of event seq so React keys never collide.
+  const queryIdRef = useRef(-1);
 
   const reopen = useCallback(() => {
     // clear awaiting flags so resumed stream starts fresh on the topic
@@ -171,6 +178,20 @@ export function useRunStream(runId: number | null): RunStreamState {
         }
         break;
       }
+      case "query": {
+        const q = ev.data?.query as string | undefined;
+        if (q) {
+          const row: RunQueryOut = {
+            id: queryIdRef.current--, // unique synthetic id for live rows (no DB id over SSE)
+            subtopic_id: (ev.data?.subtopic_id as number | null) ?? null,
+            round: (ev.data?.round as number | undefined) ?? 1,
+            query: q,
+            hits: (ev.data?.hits as number | undefined) ?? 0,
+          };
+          setQueries((prev) => [...prev, row]);
+        }
+        break;
+      }
       case "token": {
         const t = ev.data?.text as string | undefined;
         if (t) setTokens((prev) => prev + t);
@@ -194,6 +215,24 @@ export function useRunStream(runId: number | null): RunStreamState {
         }
         break;
       }
+      case "report_grounding": {
+        // Verification ran after the report streamed: patch the grounding-weighted
+        // certainty + per-verdict breakdown onto every language's report in place.
+        const certainty = ev.data?.certainty as number | undefined;
+        const grounding = ev.data?.grounding as ReportGrounding | undefined;
+        const patch = (r: ReportOut): ReportOut => ({
+          ...r,
+          certainty: certainty ?? r.certainty,
+          grounding: grounding ?? r.grounding,
+        });
+        setReports((prev) => {
+          const next = new Map(prev);
+          for (const [lang, r] of next) next.set(lang, patch(r));
+          return next;
+        });
+        setReport((cur) => (cur ? patch(cur) : cur));
+        break;
+      }
       case "run_finished": {
         const s = (ev.data?.status as string) ?? "finished";
         setStatus(
@@ -207,7 +246,9 @@ export function useRunStream(runId: number | null): RunStreamState {
         break;
       }
       case "error": {
-        const msg = (ev.data?.message as string) ?? ev.message ?? "Bilinmeyen hata";
+        // Leave null when the frame carries no message so the UI falls back to
+        // the localized t("common.error") instead of a hardcoded string.
+        const msg = (ev.data?.message as string) ?? ev.message ?? null;
         setError(msg);
         setStatus("error");
         setActiveNode(null);
@@ -268,6 +309,7 @@ export function useRunStream(runId: number | null): RunStreamState {
     statusMessage,
     sources,
     subtopics,
+    queries,
     report,
     reports,
     tokens,

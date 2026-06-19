@@ -74,6 +74,7 @@ const tr: Dict = {
   "research.trace": "Ajan İzi",
   "research.graph": "Konu Grafiği",
   "research.report": "Rapor",
+  "research.trailTab": "Araştırma İzi",
   "research.sources": "Kaynaklar",
   "research.approval": "Plan Onayı",
   "research.cancel": "İptal",
@@ -144,10 +145,43 @@ const tr: Dict = {
   "source.col.kept": "Durum",
   "source.expand": "Detay",
 
+  "diversity.title": "Çeşitlilik",
+  "diversity.domains": "alan",
+  "diversity.sources": "kaynak",
+  "diversity.top": "en çok",
+  "diversity.echo": "Eko-oda riski",
+  "diversity.echoFrom": "tek alandan:",
+  "diversity.other": "diğer",
+
+  "verify.legend": "Atıf doğrulama",
+  "verify.supported": "Doğrulandı",
+  "verify.partial": "Kısmen destekli",
+  "verify.unsupported": "Desteklenmiyor",
+  "verify.unverifiable": "Doğrulanamaz",
+
+  "trail.queries": "Sorgular",
+  "trail.found": "bulundu",
+  "trail.kept": "tutuldu",
+  "trail.hits": "sonuç",
+  "trail.round": "T",
+  "trail.dropped": "elenen",
+  "trail.other": "Genel / Snowball",
+  "trail.empty": "Henüz arama sorgusu yok.",
+
   "report.consensus": "Uzlaşı Özeti",
+  "report.disagreements": "Anlaşmazlıklar",
   "report.comprehensiveness": "Kapsamlılık",
   "report.certainty": "Kesinlik",
+  "report.grounding": "Kanıt temeli",
+  "report.grounded": "iddia kaynaklı",
   "report.language": "Dil",
+
+  "ask.title": "Rapora sor",
+  "ask.placeholder": "Bu çalışmanın kaynaklarına dayalı bir soru sorun…",
+  "ask.send": "Sor",
+  "ask.notFound": "Bu çalışmanın kaynaklarında ilgili bir bilgi bulunamadı.",
+  "ask.ungrounded": "Yanıt kaynaklarla gerekçelendirilemedi.",
+  "ask.error": "Soru yanıtlanamadı.",
 
   "export.title": "Dışa Aktar",
   "export.menu": "Dışa Aktar",
@@ -286,6 +320,21 @@ const tr: Dict = {
   "about.feat.transparent.title": "Şeffaf skorlama",
   "about.feat.transparent.desc":
     "Her kaynağın skoru, 'neden tutuldu' gerekçesi ve raporda atıf alıp almadığı görünür; rapordaki [n] işaretleri tam olarak ilgili kaynağa götürür.",
+  "about.feat.verify.title": "Atıf doğrulama",
+  "about.feat.verify.desc":
+    "Her [n] atfı, kaynağın gerçek metniyle karşılaştırılır (embedding + LLM): destekleniyor / kısmen / desteklenmiyor / doğrulanamaz. Desteklenmeyen iddialar yeniden araştırmaya yönlendirilir; kesinlik puanı kaynakların iddiayı gerçekten desteklediği orana göre hesaplanır.",
+  "about.feat.disagreement.title": "Anlaşmazlık tespiti",
+  "about.feat.disagreement.desc":
+    "Rapor, kaynakların çeliştiği veya belirsiz kaldığı noktaları ayrı bir bölümde açıkça gösterir.",
+  "about.feat.diversity.title": "Kaynak çeşitliliği",
+  "about.feat.diversity.desc":
+    "Alan adı çeşitliliği ölçülür; kanıt tek bir alanda yoğunlaşınca eko-oda uyarısı verilir.",
+  "about.feat.trail.title": "Araştırma izi",
+  "about.feat.trail.desc":
+    "Hangi sorguların atıldığı, kaç sonuç döndüğü ve hangi kaynakların tutulduğu/elendiği şeffafça izlenir.",
+  "about.feat.ask.title": "Rapora sor",
+  "about.feat.ask.desc":
+    "Rapor bittikten sonra, yalnızca o çalışmanın topladığı kaynaklara dayalı takip soruları sorulur; cevaplar aynı [n] atıflarıyla gelir.",
   "about.feat.console.title": "Canlı terminal/konsol",
   "about.feat.console.desc": "Tüm ajan adımları gerçek zamanlı canlı konsolda akar.",
   "about.feat.hybrid.title": "Hibrit LLM",
@@ -389,6 +438,7 @@ const en: Dict = {
   "research.trace": "Agent Trace",
   "research.graph": "Topic Graph",
   "research.report": "Report",
+  "research.trailTab": "Trail",
   "research.sources": "Sources",
   "research.approval": "Plan Approval",
   "research.cancel": "Cancel",
@@ -458,10 +508,43 @@ const en: Dict = {
   "source.col.kept": "Status",
   "source.expand": "Details",
 
+  "diversity.title": "Diversity",
+  "diversity.domains": "domains",
+  "diversity.sources": "sources",
+  "diversity.top": "top",
+  "diversity.echo": "Echo-chamber risk",
+  "diversity.echoFrom": "from one domain:",
+  "diversity.other": "other",
+
+  "verify.legend": "Citation check",
+  "verify.supported": "Supported",
+  "verify.partial": "Partly supported",
+  "verify.unsupported": "Unsupported",
+  "verify.unverifiable": "Unverifiable",
+
+  "trail.queries": "Queries",
+  "trail.found": "found",
+  "trail.kept": "kept",
+  "trail.hits": "hits",
+  "trail.round": "R",
+  "trail.dropped": "dropped",
+  "trail.other": "General / Snowball",
+  "trail.empty": "No search queries yet.",
+
   "report.consensus": "Consensus Summary",
+  "report.disagreements": "Points of Disagreement",
   "report.comprehensiveness": "Comprehensiveness",
   "report.certainty": "Certainty",
+  "report.grounding": "Grounding",
+  "report.grounded": "claims grounded",
   "report.language": "Language",
+
+  "ask.title": "Ask the report",
+  "ask.placeholder": "Ask a question grounded in this run's sources…",
+  "ask.send": "Ask",
+  "ask.notFound": "Nothing relevant was found in this run's sources.",
+  "ask.ungrounded": "The answer could not be grounded in the sources.",
+  "ask.error": "Could not answer the question.",
 
   "export.title": "Export",
   "export.menu": "Export",
@@ -600,6 +683,21 @@ const en: Dict = {
   "about.feat.transparent.title": "Transparent scoring",
   "about.feat.transparent.desc":
     "Each source's score, 'why kept' rationale, and whether the report cites it are visible; inline [n] markers jump to the exact source.",
+  "about.feat.verify.title": "Citation verification",
+  "about.feat.verify.desc":
+    "Every [n] citation is checked against the source's actual text (embedding + LLM): supported / partial / unsupported / unverifiable. Unsupported claims are routed back for re-research, and the certainty score is the share of claims their sources actually back.",
+  "about.feat.disagreement.title": "Disagreement detection",
+  "about.feat.disagreement.desc":
+    "The report explicitly surfaces where sources conflict or remain uncertain, in a dedicated section.",
+  "about.feat.diversity.title": "Source diversity",
+  "about.feat.diversity.desc":
+    "Domain diversity is measured; an echo-chamber warning fires when evidence concentrates in one domain.",
+  "about.feat.trail.title": "Research trail",
+  "about.feat.trail.desc":
+    "Transparently track which queries were issued, how many hits each returned, and which sources were kept or dropped.",
+  "about.feat.ask.title": "Ask the report",
+  "about.feat.ask.desc":
+    "After a report lands, ask follow-up questions answered only from that run's gathered sources — with the same clickable [n] citations.",
   "about.feat.console.title": "Live terminal/console",
   "about.feat.console.desc": "Every agent step streams to a real-time live console.",
   "about.feat.hybrid.title": "Hybrid LLM",

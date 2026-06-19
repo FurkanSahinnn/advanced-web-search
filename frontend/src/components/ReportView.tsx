@@ -1,10 +1,10 @@
-import { useCallback, type ReactNode } from "react";
+import { Fragment, useCallback, useMemo, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
-import { Lightbulb } from "lucide-react";
-import type { ReportOut, SourceOut } from "../lib/types";
+import { Lightbulb, Scale } from "lucide-react";
+import type { CitationVerdict, ReportOut, SourceOut } from "../lib/types";
 import { useLang } from "../lib/i18n";
 import { langKey } from "../lib/languages";
 import { Progress } from "./ui/progress";
@@ -39,7 +39,7 @@ function normalizeMath(src: string): string {
     .join("");
 }
 
-function highlightSource(id: number) {
+export function highlightSource(id: number) {
   const el = document.getElementById(`source-${id}`);
   if (!el) return;
   el.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -49,11 +49,37 @@ function highlightSource(id: number) {
   el.classList.add("citation-flash");
 }
 
-// Replace inline [n] citation markers with clickable superscripts.
-function renderWithCitations(
+// Inline [n] badge tint by verification verdict (when known). No verdict keeps
+// the neutral accent style so unverified runs look exactly as before.
+const VERDICT_STYLE: Record<CitationVerdict, { color: string; bg: string }> = {
+  supported: {
+    color: "var(--color-good)",
+    bg: "color-mix(in srgb, var(--color-good) 18%, transparent)",
+  },
+  partial: {
+    color: "var(--color-warn)",
+    bg: "color-mix(in srgb, var(--color-warn) 18%, transparent)",
+  },
+  unsupported: {
+    color: "var(--color-danger)",
+    bg: "color-mix(in srgb, var(--color-danger) 18%, transparent)",
+  },
+  unverifiable: {
+    color: "var(--color-faint)",
+    bg: "color-mix(in srgb, var(--color-faint) 16%, transparent)",
+  },
+};
+
+// Replace inline [n] citation markers with clickable superscripts. When a
+// per-source verification verdict is known, the marker is tinted accordingly
+// and its tooltip names the verdict. Exported so Ask-the-Report answers render
+// citations identically to the report body.
+export function renderWithCitations(
   text: string,
   sourceByIndex: Map<number, number>,
   onCite: (sourceId: number) => void,
+  verdicts: ReadonlyMap<number, CitationVerdict> | undefined,
+  t: (k: string) => string,
 ): ReactNode[] {
   const parts: ReactNode[] = [];
   const re = /\[(\d+)\]/g;
@@ -67,12 +93,20 @@ function renderWithCitations(
     // number that isn't a real citation, or an old report whose heuristic falls
     // short), the click is a no-op rather than scrolling to an arbitrary row.
     const sourceId = sourceByIndex.get(n);
+    const verdict = sourceId != null ? verdicts?.get(sourceId) : undefined;
+    const vs = verdict ? VERDICT_STYLE[verdict] : null;
     parts.push(
       <sup key={`c-${key++}`}>
         <button
           onClick={() => sourceId != null && onCite(sourceId)}
-          className="mx-0.5 rounded bg-[var(--color-accent-soft)] px-1 text-[10px] font-semibold text-[var(--color-accent)] hover:bg-[var(--color-accent)] hover:text-[var(--color-accent-fg)]"
-          title={`#${n}`}
+          className={cn(
+            "mx-0.5 rounded px-1 text-[10px] font-semibold",
+            vs
+              ? "hover:brightness-110"
+              : "bg-[var(--color-accent-soft)] text-[var(--color-accent)] hover:bg-[var(--color-accent)] hover:text-[var(--color-accent-fg)]",
+          )}
+          style={vs ? { color: vs.color, background: vs.bg } : undefined}
+          title={verdict ? `#${n} · ${t(`verify.${verdict}`)}` : `#${n}`}
         >
           {n}
         </button>
@@ -88,18 +122,20 @@ function processChildren(
   children: ReactNode,
   sourceByIndex: Map<number, number>,
   onCite: (id: number) => void,
+  verdicts: ReadonlyMap<number, CitationVerdict> | undefined,
+  t: (k: string) => string,
 ): ReactNode {
   if (typeof children === "string") {
-    return renderWithCitations(children, sourceByIndex, onCite);
+    return renderWithCitations(children, sourceByIndex, onCite, verdicts, t);
   }
   if (Array.isArray(children)) {
     return children.map((c, i) =>
       typeof c === "string" ? (
         <span key={i}>
-          {renderWithCitations(c, sourceByIndex, onCite)}
+          {renderWithCitations(c, sourceByIndex, onCite, verdicts, t)}
         </span>
       ) : (
-        c
+        <Fragment key={i}>{c}</Fragment>
       ),
     );
   }
@@ -130,6 +166,7 @@ export function ReportView({
   reports,
   activeLang,
   onLangChange,
+  verdicts,
   className,
 }: {
   report: ReportOut | null;
@@ -139,6 +176,8 @@ export function ReportView({
   reports?: ReportOut[];
   activeLang?: string;
   onLangChange?: (lang: string) => void;
+  // Per-source citation verdicts; tints the inline [n] markers when present.
+  verdicts?: ReadonlyMap<number, CitationVerdict>;
   className?: string;
 }) {
   const { t } = useLang();
@@ -148,7 +187,7 @@ export function ReportView({
   // resolves to the EXACT source. Older runs without it fall back to the legacy
   // heuristic: order sources by id and treat [n] as the 1-based index.
   const refs = report?.references;
-  const sourceByIndex = useCallback(() => {
+  const sourceByIndex = useMemo(() => {
     const map = new Map<number, number>();
     if (refs && refs.length > 0) {
       refs.forEach((sid, i) => map.set(i + 1, sid));
@@ -157,7 +196,7 @@ export function ReportView({
     const ordered = [...sources].sort((a, b) => a.id - b.id);
     ordered.forEach((s, i) => map.set(i + 1, s.id));
     return map;
-  }, [sources, refs])();
+  }, [sources, refs]);
 
   const onCite = useCallback((id: number) => highlightSource(id), []);
 
@@ -209,14 +248,14 @@ export function ReportView({
   }
 
   const proc = (children: ReactNode) =>
-    processChildren(children, sourceByIndex, onCite);
+    processChildren(children, sourceByIndex, onCite, verdicts, t);
 
   return (
     <div className={cn("flex h-full flex-col overflow-y-auto scrollbar-thin", className)}>
       <div className="mx-auto w-full max-w-3xl px-5 py-5">
         {langTabRow}
 
-        {report?.consensus_summary && (
+        {report?.consensus_summary?.trim() && (
           <div className="mb-4 flex gap-2.5 rounded-lg border border-[color-mix(in_srgb,var(--color-accent)_35%,transparent)] bg-[var(--color-accent-soft)] p-3">
             <Lightbulb
               size={18}
@@ -233,6 +272,23 @@ export function ReportView({
           </div>
         )}
 
+        {report?.disagreements?.trim() && (
+          <div className="mb-4 flex gap-2.5 rounded-lg border border-[color-mix(in_srgb,var(--color-danger)_30%,transparent)] bg-[color-mix(in_srgb,var(--color-danger)_8%,transparent)] p-3">
+            <Scale
+              size={18}
+              className="mt-0.5 shrink-0 text-[var(--color-danger)]"
+            />
+            <div>
+              <p className="text-xs font-semibold text-[var(--color-danger)]">
+                {t("report.disagreements")}
+              </p>
+              <p className="mt-0.5 text-sm text-[var(--color-fg)]">
+                {report.disagreements}
+              </p>
+            </div>
+          </div>
+        )}
+
         {(report?.comprehensiveness != null ||
           report?.certainty != null) && (
           <div className="mb-5 flex gap-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-3">
@@ -244,6 +300,51 @@ export function ReportView({
               label={t("report.certainty")}
               value={report?.certainty ?? null}
             />
+          </div>
+        )}
+
+        {report?.grounding && report.grounding.graded > 0 && (
+          <div className="-mt-3 mb-5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-[var(--color-muted)]">
+            <span className="font-medium text-[var(--color-fg)]">
+              {t("report.grounding")}:
+            </span>
+            <span className="tabular-nums">
+              {report.grounding.grounded}/{report.grounding.graded}{" "}
+              {t("report.grounded")}
+            </span>
+            {(
+              ["supported", "partial", "unsupported", "unverifiable"] as CitationVerdict[]
+            ).map((v) =>
+              report.grounding![v] > 0 ? (
+                <span key={v} className="inline-flex items-center gap-1">
+                  <span
+                    className="inline-block h-2 w-2 rounded-full"
+                    style={{ background: VERDICT_STYLE[v].color }}
+                  />
+                  <span className="tabular-nums">{report.grounding![v]}</span>{" "}
+                  {t(`verify.${v}`)}
+                </span>
+              ) : null,
+            )}
+          </div>
+        )}
+
+        {verdicts && verdicts.size > 0 && (
+          <div className="mb-4 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] px-2.5 py-1.5 text-[10px] text-[var(--color-muted)]">
+            <span className="font-medium text-[var(--color-fg)]">
+              {t("verify.legend")}:
+            </span>
+            {(
+              ["supported", "partial", "unsupported", "unverifiable"] as CitationVerdict[]
+            ).map((v) => (
+              <span key={v} className="inline-flex items-center gap-1">
+                <span
+                  className="inline-block h-2 w-2 rounded-full"
+                  style={{ background: VERDICT_STYLE[v].color }}
+                />
+                {t(`verify.${v}`)}
+              </span>
+            ))}
           </div>
         )}
 

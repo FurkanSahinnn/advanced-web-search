@@ -385,6 +385,31 @@ def report_references(report: Optional[dict]) -> list[int]:
     return out
 
 
+def _grounding_summary(report: Optional[dict]) -> str:
+    """A compact, language-neutral grounding line from a report's `grounding` JSON.
+
+    Returns '' when the run predates verification or had no graded claims, so
+    older/ungraded reports export exactly as before.
+    """
+    raw = (report or {}).get("grounding")
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except Exception:
+            return ""
+    if not isinstance(raw, dict):
+        return ""
+    try:
+        graded = int(raw.get("graded") or 0)
+        grounded = int(raw.get("grounded") or 0)
+    except (TypeError, ValueError):
+        return ""
+    if graded <= 0:
+        return ""
+    pct = round(100 * grounded / graded)
+    return f"Kanıt / Grounding: {grounded}/{graded} ({pct}%)"
+
+
 def _numbered_refs(report: Optional[dict], sources: list[dict]) -> list[tuple[int, dict]]:
     """Pair each source with its true citation number n, in [n] order.
 
@@ -428,6 +453,11 @@ def report_to_markdown(report: Optional[dict], sources: list[dict], project: dic
     out: list[str] = [f"# {title}", ""]
     if root_query and root_query != title:
         out.append(f"> {root_query}")
+        out.append("")
+
+    grounding = _grounding_summary(report)
+    if grounding:
+        out.append(f"> _{grounding}_")
         out.append("")
 
     body = _s((report or {}).get("markdown")) if report else ""
@@ -557,7 +587,9 @@ ul, ol { margin: .8rem 0 .8rem 1.4rem; padding: 0; }
 li { margin: .25rem 0; }
 hr { border: 0; border-top: 1px solid #ddd; margin: 2rem 0; }
 blockquote { margin: 1rem 0; padding: .25rem 0 .25rem 1rem; border-left: 3px solid #ccc; color: #555; font-style: italic; }
+blockquote.aws-disagree { border-left-color: #b0413e; color: #7a2e2c; }
 .aws-subtitle { color: #555; font-style: italic; margin: 0 0 1.5rem; }
+.aws-grounding { color: #14507a; font-size: .85rem; margin: 0 0 1rem; }
 .aws-refs { margin-top: 2.5rem; }
 .aws-refs ol { font-size: .95rem; }
 .aws-refs li { margin: .5rem 0; word-break: break-word; }
@@ -588,6 +620,8 @@ def to_html(
     sources = sources or []
     title = _s(project.get("title")) or _s(project.get("root_query")) or "Advanced Web Search Report"
     root_query = _s(project.get("root_query"))
+    # Signal the actual report language to screen readers / spell-checkers.
+    doc_lang = _s((report or {}).get("language")) or "tr"
 
     body_md = _s((report or {}).get("markdown")) if report else ""
     body_html = _md_to_html(body_md) if body_md else "<p><em>No report available.</em></p>"
@@ -612,6 +646,20 @@ def to_html(
         f'<blockquote>{_md_inline(consensus)}</blockquote>' if consensus else ""
     )
 
+    disagreements = _s((report or {}).get("disagreements")) if report else ""
+    # No hardcoded label (the report may be in any language); the red-bordered
+    # style distinguishes it from the consensus blockquote.
+    disagreements_html = (
+        f'<blockquote class="aws-disagree">{_md_inline(disagreements)}</blockquote>'
+        if disagreements else ""
+    )
+
+    grounding_summary = _grounding_summary(report)
+    grounding_html = (
+        f'<p class="aws-grounding">{_html.escape(grounding_summary)}</p>'
+        if grounding_summary else ""
+    )
+
     auto_print_script = (
         "<script>window.addEventListener('load',function(){"
         "setTimeout(function(){window.print();},350);});</script>"
@@ -620,7 +668,7 @@ def to_html(
     )
 
     return f"""<!doctype html>
-<html lang="tr">
+<html lang="{_html.escape(doc_lang, quote=True)}">
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
@@ -632,7 +680,9 @@ def to_html(
 <body>
 <h1>{_html.escape(title)}</h1>
 {subtitle}
+{grounding_html}
 {consensus_html}
+{disagreements_html}
 <article>
 {body_html}
 </article>

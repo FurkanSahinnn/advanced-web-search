@@ -15,6 +15,11 @@ import {
   FlaskConical,
   PlayCircle,
   Lightbulb,
+  Scale,
+  Globe,
+  BadgeCheck,
+  Route,
+  Sparkles,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useState } from "react";
@@ -157,7 +162,7 @@ const architecture = (lang: Lang) =>
   lang === "tr"
     ? `flowchart TB
   subgraph FE["Frontend — React 19 · Vite · Tailwind"]
-    UI["AgentTrace · Konu Grafiği · Canlı Konsol · Kaynak Kartları · Rapor · Dışa Aktarma"]
+    UI["AgentTrace · Konu Grafiği · Araştırma İzi · Canlı Konsol · Kaynak Kartları · Rapor · Dışa Aktarma"]
   end
   subgraph BE["Backend — Python · FastAPI"]
     API["REST + SSE"]
@@ -179,7 +184,7 @@ const architecture = (lang: Lang) =>
   LG <--> DATA`
     : `flowchart TB
   subgraph FE["Frontend — React 19 · Vite · Tailwind"]
-    UI["AgentTrace · Topic Graph · Live Console · Source Cards · Report · Export"]
+    UI["AgentTrace · Topic Graph · Research Trail · Live Console · Source Cards · Report · Export"]
   end
   subgraph BE["Backend — Python · FastAPI"]
     API["REST + SSE"]
@@ -210,6 +215,11 @@ const FEATURES: Feature[] = [
   { icon: Languages, titleKey: "about.feat.bilingual.title", descKey: "about.feat.bilingual.desc" },
   { icon: Languages, titleKey: "about.feat.multilang.title", descKey: "about.feat.multilang.desc" },
   { icon: Eye, titleKey: "about.feat.transparent.title", descKey: "about.feat.transparent.desc" },
+  { icon: BadgeCheck, titleKey: "about.feat.verify.title", descKey: "about.feat.verify.desc" },
+  { icon: Scale, titleKey: "about.feat.disagreement.title", descKey: "about.feat.disagreement.desc" },
+  { icon: Globe, titleKey: "about.feat.diversity.title", descKey: "about.feat.diversity.desc" },
+  { icon: Route, titleKey: "about.feat.trail.title", descKey: "about.feat.trail.desc" },
+  { icon: Sparkles, titleKey: "about.feat.ask.title", descKey: "about.feat.ask.desc" },
   { icon: TerminalSquare, titleKey: "about.feat.console.title", descKey: "about.feat.console.desc" },
   { icon: Cpu, titleKey: "about.feat.hybrid.title", descKey: "about.feat.hybrid.desc" },
   { icon: Boxes, titleKey: "about.feat.embedding.title", descKey: "about.feat.embedding.desc" },

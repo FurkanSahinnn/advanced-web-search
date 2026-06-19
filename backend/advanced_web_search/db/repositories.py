@@ -280,6 +280,19 @@ def get_source(source_id: int) -> Optional[dict]:
 # Claims / citations / report
 # --------------------------------------------------------------------------- #
 
+def delete_claims(run_id: int) -> None:
+    """Remove a run's claims (citations cascade via ON DELETE CASCADE).
+
+    Each synthesizer pass rebuilds the claim set from the CURRENT report, so a
+    re-synthesis (the fatal loop or the entailment re-research loop) must clear
+    the prior pass's claims first. Otherwise ``get_claims`` returns stale + fresh
+    claims and the grounding share, the verifier's citation budget, and
+    re-research targeting are all computed over duplicates.
+    """
+    with tx() as c:
+        c.execute("DELETE FROM claims WHERE run_id=?", (run_id,))
+
+
 def insert_claim(run_id: int, subtopic_id: Optional[int], text: str, status: str = "supported") -> int:
     def _do(c: sqlite3.Connection) -> int:
         cur = c.execute(
@@ -306,13 +319,20 @@ def insert_citation(claim_id: int, source_id: int, *, stance: str = "supporting"
 
 
 def update_citation_verdict(citation_id: int, *, verified: bool, dead_link: bool,
-                            stance: Optional[str] = None, quote: Optional[str] = None) -> None:
+                            stance: Optional[str] = None, quote: Optional[str] = None,
+                            support: Optional[str] = None,
+                            support_score: Optional[float] = None) -> None:
+    # `verified`/`dead_link` are link-liveness; `support`/`support_score` are the
+    # claim<->source entailment verdict (kept distinct). COALESCE preserves any
+    # existing value when a field is passed as None.
     with tx() as c:
         c.execute(
             """UPDATE citations SET verified=?, dead_link=?,
-               stance=COALESCE(?, stance), supporting_quote=COALESCE(?, supporting_quote)
+               stance=COALESCE(?, stance), supporting_quote=COALESCE(?, supporting_quote),
+               support=COALESCE(?, support), support_score=COALESCE(?, support_score)
                WHERE id=?""",
-            (1 if verified else 0, 1 if dead_link else 0, stance, quote, citation_id),
+            (1 if verified else 0, 1 if dead_link else 0, stance, quote,
+             support, support_score, citation_id),
         )
 
 
@@ -333,24 +353,43 @@ def get_claims(run_id: int) -> list[dict]:
 
 
 def save_report(run_id: int, markdown: str, *, language: str = "en", ord: int = 0,
-                consensus_summary: str = "", comprehensiveness: float = 0.0,
+                consensus_summary: str = "", disagreements: Optional[str] = None,
+                comprehensiveness: float = 0.0,
                 certainty: float = 0.0, ref_ids: Optional[list[int]] = None) -> int:
     # `ref_ids` is the [n]->source-id mapping (n == index+1) persisted as JSON so
     # clients/exports can resolve inline citation markers exactly. None for older
-    # callers/runs that didn't compute it.
+    # callers/runs that didn't compute it. `disagreements` is the conflict
+    # counterpart to `consensus_summary` (both free text, may be empty).
     refs_json = json.dumps(ref_ids, ensure_ascii=False) if ref_ids is not None else None
 
     def _do(c: sqlite3.Connection) -> int:
         cur = c.execute(
             """INSERT INTO reports(run_id, markdown, language, ord, consensus_summary,
-                                   comprehensiveness, certainty, ref_ids)
-               VALUES(?,?,?,?,?,?,?,?)""",
-            (run_id, markdown, language, ord, consensus_summary, comprehensiveness,
-             certainty, refs_json),
+                                   disagreements, comprehensiveness, certainty, ref_ids)
+               VALUES(?,?,?,?,?,?,?,?,?)""",
+            (run_id, markdown, language, ord, consensus_summary, disagreements,
+             comprehensiveness, certainty, refs_json),
         )
         return int(cur.lastrowid)
 
     return run_in_tx(_do)
+
+
+def update_report_grounding(run_id: int, certainty: Optional[float],
+                            grounding: Optional[dict]) -> None:
+    """Rewrite a run's reports with post-verification grounding.
+
+    The verifier runs AFTER the synthesizer saved the reports, so it patches the
+    grounding-weighted `certainty` (the share of claims whose cited source text
+    actually entails them) and the per-verdict breakdown onto every language row
+    of the run. `certainty=None` leaves the existing value untouched (COALESCE).
+    """
+    g_json = json.dumps(grounding, ensure_ascii=False) if grounding is not None else None
+    with tx() as c:
+        c.execute(
+            "UPDATE reports SET certainty=COALESCE(?, certainty), grounding=? WHERE run_id=?",
+            (certainty, g_json, run_id),
+        )
 
 
 def get_report(run_id: int, language: Optional[str] = None) -> Optional[dict]:
@@ -374,6 +413,52 @@ def get_reports(run_id: int) -> list[dict]:
              ON r.id = m.mid
            ORDER BY r.ord ASC, r.id ASC""",
         (run_id,),
+    ).fetchall())
+
+
+# --------------------------------------------------------------------------- #
+# Research trail (issued queries)
+# --------------------------------------------------------------------------- #
+
+def add_run_query(run_id: int, subtopic_id: Optional[int], research_round: int,
+                  query: str, hits: int = 0) -> int:
+    def _do(c: sqlite3.Connection) -> int:
+        cur = c.execute(
+            "INSERT INTO run_queries(run_id, subtopic_id, round, query, hits) VALUES(?,?,?,?,?)",
+            (run_id, subtopic_id, int(research_round), query, int(hits)),
+        )
+        return int(cur.lastrowid)
+
+    return run_in_tx(_do)
+
+
+def get_run_queries(run_id: int) -> list[dict]:
+    return _rows(get_conn().execute(
+        "SELECT * FROM run_queries WHERE run_id=? ORDER BY id", (run_id,)
+    ).fetchall())
+
+
+# --------------------------------------------------------------------------- #
+# Ask-the-Report (grounded follow-up Q&A over a run's own sources)
+# --------------------------------------------------------------------------- #
+
+def add_run_ask(run_id: int, question: str, answer: str,
+                ref_ids: Optional[list[int]] = None, grounded: bool = True) -> int:
+    refs_json = json.dumps(ref_ids, ensure_ascii=False) if ref_ids is not None else None
+
+    def _do(c: sqlite3.Connection) -> int:
+        cur = c.execute(
+            "INSERT INTO run_asks(run_id, question, answer, ref_ids, grounded) VALUES(?,?,?,?,?)",
+            (run_id, question, answer, refs_json, 1 if grounded else 0),
+        )
+        return int(cur.lastrowid)
+
+    return run_in_tx(_do)
+
+
+def get_run_asks(run_id: int) -> list[dict]:
+    return _rows(get_conn().execute(
+        "SELECT * FROM run_asks WHERE run_id=? ORDER BY id", (run_id,)
     ).fetchall())
 
 

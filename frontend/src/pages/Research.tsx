@@ -7,6 +7,7 @@ import type { RunStatus } from "../lib/sse";
 import { useLang } from "../lib/i18n";
 import type {
   ApprovalDecision,
+  CitationVerdict,
   ProjectDetail,
   ReportOut,
   ResearchEvent,
@@ -19,7 +20,10 @@ import { ExportMenu } from "../components/ExportMenu";
 import { TopicGraph } from "../components/TopicGraph";
 import { ApprovalPanel } from "../components/ApprovalPanel";
 import { ReportView } from "../components/ReportView";
+import { AskReport } from "../components/AskReport";
 import { SourceTable } from "../components/SourceTable";
+import { SourceDiversity } from "../components/SourceDiversity";
+import { ResearchTrail } from "../components/ResearchTrail";
 import { StatusBadge } from "../components/StatusBadge";
 import { Button } from "../components/ui/button";
 import { Spinner } from "../components/ui/spinner";
@@ -141,6 +145,47 @@ export function Research() {
     }
     return set;
   }, [report?.markdown, report?.references]);
+
+  // Per-source citation-verification verdict, aggregated from the persisted
+  // claims and any live `citation_verified` events. A [n] marker resolves to a
+  // source, so its badge reflects that source's citations; the worst verdict
+  // wins so a mis-citation surfaces rather than hiding behind good ones. Empty
+  // for older runs / before verification lands.
+  const verdictBySourceId = useMemo<Map<number, CitationVerdict>>(() => {
+    const supportsBySource = new Map<number, string[]>();
+    const push = (sid: unknown, support: unknown) => {
+      if (typeof sid !== "number" || typeof support !== "string" || !support) return;
+      const arr = supportsBySource.get(sid) ?? [];
+      arr.push(support);
+      supportsBySource.set(sid, arr);
+    };
+    for (const cl of detail?.claims ?? [])
+      for (const c of cl.citations ?? []) push(c.source_id, c.support);
+    for (const ev of stream.events)
+      if (ev.type === "citation_verified")
+        push(ev.data?.source_id, ev.data?.support);
+
+    // Aggregate precedence (highest wins): a problem (unsupported) outranks a
+    // hedge (partial) outranks a pass (supported) outranks 'unverifiable' — the
+    // least informative verdict (no stored source text to check), so it only
+    // surfaces when it is a source's ONLY verdict.
+    const RANK: Record<string, number> = {
+      unsupported: 4, partial: 3, supported: 2, unverifiable: 1,
+    };
+    const out = new Map<number, CitationVerdict>();
+    for (const [sid, list] of supportsBySource) {
+      let best: string | null = null;
+      for (const s of list)
+        if (best == null || (RANK[s] ?? 0) > (RANK[best] ?? 0)) best = s;
+      if (best) out.set(sid, best as CitationVerdict);
+    }
+    return out;
+  }, [detail?.claims, stream.events]);
+
+  // Research-trail queries: live ones while streaming, else the persisted set
+  // (so a reopened finished run still shows what was searched).
+  const trailQueries =
+    stream.queries.length > 0 ? stream.queries : (detail?.queries ?? []);
 
   // Reopening a finished project loses the live SSE trace (the per-node events
   // are never persisted), so rebuild an equivalent completed trace from the
@@ -322,6 +367,9 @@ export function Research() {
               <div className="flex items-center gap-2 border-b border-[var(--color-border)] px-3 py-2">
                 <TabsList>
                   <TabsTrigger value="graph">{t("research.graph")}</TabsTrigger>
+                  <TabsTrigger value="trail">
+                    {t("research.trailTab")}
+                  </TabsTrigger>
                   <TabsTrigger value="report">
                     {t("research.report")}
                   </TabsTrigger>
@@ -340,16 +388,39 @@ export function Research() {
                   <TopicGraph rootQuery={rootQuery} subtopics={subtopics} />
                 </div>
               </TabsContent>
-              <TabsContent value="report" className="min-h-0 flex-1">
-                <ReportView
-                  report={selectedReport}
-                  reports={allReports}
-                  activeLang={effectiveLang}
-                  onLangChange={setActiveLang}
-                  liveMarkdown={stream.tokens}
-                  streaming={isStreaming}
+              <TabsContent value="trail" className="min-h-0 flex-1">
+                <ResearchTrail
+                  queries={trailQueries}
+                  subtopics={subtopics}
                   sources={mergedSources}
+                  citedSourceIds={citedSourceIds}
                 />
+              </TabsContent>
+              <TabsContent value="report" className="min-h-0 flex-1">
+                <div className="flex h-full min-h-0 flex-col">
+                  <ReportView
+                    className="min-h-0 flex-1"
+                    report={selectedReport}
+                    reports={allReports}
+                    activeLang={effectiveLang}
+                    onLangChange={setActiveLang}
+                    liveMarkdown={stream.tokens}
+                    streaming={isStreaming}
+                    sources={mergedSources}
+                    verdicts={verdictBySourceId}
+                  />
+                  {/* Grounded follow-up Q&A over this run's own sources. Shown
+                      once a report exists and the run is no longer streaming. */}
+                  {!!report && !isStreaming && (
+                    <AskReport
+                      runId={runId}
+                      sources={mergedSources}
+                      verdicts={verdictBySourceId}
+                      initial={detail?.asks}
+                      language={effectiveLang}
+                    />
+                  )}
+                </div>
               </TabsContent>
             </Tabs>
           )}
@@ -380,6 +451,7 @@ export function Research() {
                 : `(${mergedSources.length})`}
             </span>
           </div>
+          <SourceDiversity sources={mergedSources} />
           <SourceTable
             sources={mergedSources}
             citedSourceIds={citedSourceIds}

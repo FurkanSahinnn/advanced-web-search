@@ -1,5 +1,6 @@
 import type {
   ApprovalDecision,
+  AskAnswer,
   CreateProjectResponse,
   ExportFormat,
   HealthResponse,
@@ -96,6 +97,13 @@ export const api = {
     }),
   cancel: (runId: number | string) =>
     request<{ ok: boolean }>(`/api/runs/${runId}/cancel`, { method: "POST" }),
+
+  // Ask-the-Report: a grounded follow-up answered only from this run's sources.
+  askReport: (runId: number | string, question: string, language?: string) =>
+    request<AskAnswer>(`/api/runs/${runId}/ask`, {
+      method: "POST",
+      json: { question, ...(language ? { language } : {}) },
+    }),
 
   // Download URL for a run's export (Markdown/BibTeX/RIS/CSL-JSON/HTML).
   // `lang` selects which language's report to export (doc formats only;

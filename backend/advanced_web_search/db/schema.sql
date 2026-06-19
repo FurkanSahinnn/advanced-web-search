@@ -116,8 +116,10 @@ CREATE TABLE IF NOT EXISTS citations (
     source_id        INTEGER NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
     stance           TEXT NOT NULL DEFAULT 'supporting', -- supporting|contrasting|mentioning
     supporting_quote TEXT,
-    verified         INTEGER NOT NULL DEFAULT 0,
-    dead_link        INTEGER NOT NULL DEFAULT 0
+    verified         INTEGER NOT NULL DEFAULT 0,         -- link liveness (NOT entailment)
+    dead_link        INTEGER NOT NULL DEFAULT 0,
+    support          TEXT,                               -- supported|partial|unsupported|unverifiable
+    support_score    REAL                                -- 0-1 claim<->source similarity (prefilter)
 );
 CREATE INDEX IF NOT EXISTS ix_citations_claim ON citations(claim_id);
 
@@ -130,12 +132,44 @@ CREATE TABLE IF NOT EXISTS reports (
     language          TEXT NOT NULL DEFAULT 'en',      -- report output language code
     ord               INTEGER NOT NULL DEFAULT 0,      -- primary-first ordering (0 = primary)
     consensus_summary TEXT,
+    disagreements     TEXT,                          -- where sources conflict/are uncertain
     comprehensiveness REAL,                          -- 0-1 coverage indicator
-    certainty         REAL,                          -- 0-1 confidence indicator
+    certainty         REAL,                          -- 0-1 confidence indicator (grounding-weighted post-verify)
     ref_ids           TEXT,                          -- JSON array of source ids in [n] citation order
+    grounding         TEXT,                          -- JSON: per-verdict claim counts + grounded share (post-verify)
     created_at        TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS ix_reports_run ON reports(run_id);
+
+-- Research trail: the actual search queries issued per subtopic/round, with the
+-- raw hit count. SSE log frames are live-only and discarded; this persists the
+-- queries so a reopened run can show "what was searched". (Plain new table, so
+-- CREATE IF NOT EXISTS adds it to existing DBs on the next startup.)
+CREATE TABLE IF NOT EXISTS run_queries (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id      INTEGER NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+    subtopic_id INTEGER REFERENCES subtopics(id) ON DELETE SET NULL,
+    round       INTEGER NOT NULL DEFAULT 1,
+    query       TEXT    NOT NULL,
+    hits        INTEGER NOT NULL DEFAULT 0,         -- raw candidates returned
+    created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS ix_run_queries_run ON run_queries(run_id);
+
+-- Ask-the-Report: grounded follow-up Q&A answered ONLY from a run's gathered
+-- sources (hybrid_search over its own chunks), with the cited source ids. Each
+-- row is one question + its grounded answer; persisted so a reopened run keeps
+-- its Q&A history. (Plain new table -> CREATE IF NOT EXISTS adds it on startup.)
+CREATE TABLE IF NOT EXISTS run_asks (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id      INTEGER NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+    question    TEXT    NOT NULL,
+    answer      TEXT    NOT NULL,
+    ref_ids     TEXT,                               -- JSON array of source ids cited in the answer
+    grounded    INTEGER NOT NULL DEFAULT 1,         -- 0 when no relevant source text was found
+    created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS ix_run_asks_run ON run_asks(run_id);
 
 -- Key-value app settings (persisted overrides: model map, weights, toggles).
 CREATE TABLE IF NOT EXISTS app_settings (

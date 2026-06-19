@@ -130,8 +130,28 @@ class CitationOut(BaseModel):
     source_id: int
     stance: str = "supporting"
     supporting_quote: Optional[str] = None
-    verified: bool = False
+    verified: bool = False          # link liveness (NOT entailment)
     dead_link: bool = False
+    # Claim<->source entailment verdict: supported | partial | unsupported |
+    # unverifiable. None when the citation has not been verified.
+    support: Optional[str] = None
+    support_score: Optional[float] = None
+
+
+class ReportGrounding(BaseModel):
+    """Post-verification entailment breakdown of the report's claims.
+
+    Counts claims by their BEST citation verdict; `grounded` = supported|partial,
+    `graded` = claims with any checked citation, `share` = grounded / graded
+    (which the verifier also writes onto `certainty`).
+    """
+    supported: int = 0
+    partial: int = 0
+    unsupported: int = 0
+    unverifiable: int = 0
+    graded: int = 0
+    grounded: int = 0
+    share: float = 0.0
 
 
 class ReportOut(BaseModel):
@@ -141,11 +161,17 @@ class ReportOut(BaseModel):
     language: str = "en"
     ord: int = 0
     consensus_summary: Optional[str] = None
+    # Where the sources conflict / are uncertain — the counterpart to the
+    # consensus summary. Empty/None when nothing notable was surfaced.
+    disagreements: Optional[str] = None
     comprehensiveness: Optional[float] = None
     certainty: Optional[float] = None
     # Source ids in [n] citation order (index+1 == the inline [n] marker). Lets a
     # client resolve a citation marker to the exact source. Empty for older runs.
     references: list[int] = Field(default_factory=list)
+    # Per-verdict claim-grounding breakdown, set after verification. None for
+    # older runs / before the verifier has run.
+    grounding: Optional[ReportGrounding] = None
     created_at: str
 
 
@@ -157,6 +183,38 @@ class RunOut(BaseModel):
     error: Optional[str] = None
     started_at: str
     finished_at: Optional[str] = None
+
+
+class RunQueryOut(BaseModel):
+    """One search query issued during the run (the research trail)."""
+    id: int
+    subtopic_id: Optional[int] = None
+    round: int = 1
+    query: str
+    hits: int = 0
+    created_at: Optional[str] = None
+
+
+# --------------------------------------------------------------------------- #
+# Ask-the-Report (grounded follow-up Q&A)
+# --------------------------------------------------------------------------- #
+
+class AskRequest(BaseModel):
+    """A follow-up question answered ONLY from a run's gathered sources."""
+    question: str = Field(min_length=2)
+    language: Optional[str] = None  # answer language; auto-detected from the question if omitted
+
+
+class AskAnswerOut(BaseModel):
+    id: int
+    question: str
+    answer: str
+    # Source ids cited in the answer, in [n] order (index+1 == the inline [n]).
+    references: list[int] = Field(default_factory=list)
+    # False when no relevant source text was found (the answer says so instead of
+    # guessing) — the UI can flag the answer as ungrounded.
+    grounded: bool = True
+    created_at: Optional[str] = None
 
 
 # --------------------------------------------------------------------------- #
@@ -262,8 +320,8 @@ class SettingsUpdate(BaseModel):
 EventType = Literal[
     "run_started", "status", "node_started", "node_finished",
     "plan", "subtopic", "awaiting_approval",
-    "source_found", "source_scored", "claim", "citation_verified",
-    "token", "report", "run_finished", "error", "log",
+    "source_found", "source_scored", "query", "claim", "citation_verified",
+    "token", "report", "report_grounding", "run_finished", "error", "log",
 ]
 
 

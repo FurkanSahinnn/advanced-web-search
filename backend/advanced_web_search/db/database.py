@@ -173,7 +173,29 @@ def _apply_migrations(conn) -> None:
     # keyword.)
     if "ref_ids" not in rcols:
         conn.execute("ALTER TABLE reports ADD COLUMN ref_ids TEXT")
+    # `disagreements`: a short summary of where the sources CONFLICT, contradict
+    # each other, or are uncertain — the counterpart to consensus_summary. Lets
+    # the report surface points of disagreement explicitly instead of burying
+    # them inside the consensus prose.
+    if "disagreements" not in rcols:
+        conn.execute("ALTER TABLE reports ADD COLUMN disagreements TEXT")
+    # `grounding`: post-verification JSON breakdown of per-verdict claim counts
+    # (supported/partial/unsupported/unverifiable) + the grounded share. Written
+    # by the verifier, which also rewrites `certainty` to that share so the
+    # confidence meter reflects whether sources actually entail the claims (not
+    # just their retrieval scores). Older rows stay NULL and fall back gracefully.
+    if "grounding" not in rcols:
+        conn.execute("ALTER TABLE reports ADD COLUMN grounding TEXT")
     conn.execute("CREATE INDEX IF NOT EXISTS ix_reports_run_lang ON reports(run_id, language)")
+
+    # Citation entailment verdict (claim actually supported by the cited source),
+    # kept SEPARATE from `verified` which means link-liveness only. `support` is
+    # the verdict label; `support_score` the embedding-prefilter similarity.
+    ccols = _column_names(conn, "citations")
+    if "support" not in ccols:
+        conn.execute("ALTER TABLE citations ADD COLUMN support TEXT")
+    if "support_score" not in ccols:
+        conn.execute("ALTER TABLE citations ADD COLUMN support_score REAL")
 
 
 def _load_sqlite_vec(conn: sqlite3.Connection) -> bool:

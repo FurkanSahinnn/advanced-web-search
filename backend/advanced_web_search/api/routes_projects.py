@@ -14,12 +14,15 @@ from fastapi import APIRouter, HTTPException
 
 from ..db import repositories
 from ..models.schemas import (
+    AskAnswerOut,
     CitationOut,
     ClaimOut,
     ProjectCreate,
     ProjectOut,
+    ReportGrounding,
     ReportOut,
     RunOut,
+    RunQueryOut,
     ScoreBreakdown,
     SourceOut,
     SubtopicOut,
@@ -136,6 +139,8 @@ def claim_out(row: dict) -> ClaimOut:
                 supporting_quote=c.get("supporting_quote"),
                 verified=bool(c.get("verified")),
                 dead_link=bool(c.get("dead_link")),
+                support=c.get("support"),
+                support_score=c.get("support_score"),
             )
         )
     return ClaimOut(
@@ -163,6 +168,13 @@ def report_out(row: dict) -> ReportOut:
                 references.append(int(x))
             except (TypeError, ValueError):
                 continue
+    grounding: Optional[ReportGrounding] = None
+    raw_g = _parse_json(row.get("grounding"), None)
+    if isinstance(raw_g, dict):
+        try:
+            grounding = ReportGrounding(**raw_g)
+        except Exception:
+            grounding = None
     return ReportOut(
         id=int(row["id"]),
         run_id=int(row["run_id"]),
@@ -170,9 +182,11 @@ def report_out(row: dict) -> ReportOut:
         language=row.get("language") or "en",
         ord=int(row.get("ord") or 0),
         consensus_summary=row.get("consensus_summary"),
+        disagreements=row.get("disagreements"),
         comprehensiveness=row.get("comprehensiveness"),
         certainty=row.get("certainty"),
         references=references,
+        grounding=grounding,
         created_at=str(row.get("created_at") or ""),
     )
 
@@ -191,6 +205,36 @@ def _project_out(row: dict) -> ProjectOut:
         status=row.get("status") or "new",
         created_at=str(row.get("created_at") or ""),
         updated_at=str(row.get("updated_at") or ""),
+    )
+
+
+def run_query_out(row: dict) -> RunQueryOut:
+    return RunQueryOut(
+        id=int(row["id"]),
+        subtopic_id=row.get("subtopic_id"),
+        round=int(row.get("round") or 1),
+        query=row.get("query") or "",
+        hits=int(row.get("hits") or 0),
+        created_at=str(row.get("created_at") or "") or None,
+    )
+
+
+def ask_answer_out(row: dict) -> AskAnswerOut:
+    raw_refs = _parse_json(row.get("ref_ids"), [])
+    references: list[int] = []
+    if isinstance(raw_refs, list):
+        for x in raw_refs:
+            try:
+                references.append(int(x))
+            except (TypeError, ValueError):
+                continue
+    return AskAnswerOut(
+        id=int(row["id"]),
+        question=row.get("question") or "",
+        answer=row.get("answer") or "",
+        references=references,
+        grounded=bool(row.get("grounded", 1)),
+        created_at=str(row.get("created_at") or "") or None,
     )
 
 
@@ -259,18 +303,24 @@ async def get_project_endpoint(pid: int) -> dict:
     reports: list[ReportOut] = []
     sources: list[SourceOut] = []
     claims: list[ClaimOut] = []
+    queries: list[RunQueryOut] = []
+    asks: list[AskAnswerOut] = []
 
     if latest:
         run_id = latest["id"]
-        report_rows, source_rows, claim_rows = await asyncio.gather(
+        report_rows, source_rows, claim_rows, query_rows, ask_rows = await asyncio.gather(
             asyncio.to_thread(repositories.get_reports, run_id),
             asyncio.to_thread(repositories.get_sources, run_id),
             asyncio.to_thread(repositories.get_claims, run_id),
+            asyncio.to_thread(repositories.get_run_queries, run_id),
+            asyncio.to_thread(repositories.get_run_asks, run_id),
         )
         reports = [report_out(r) for r in report_rows]
         report = reports[0] if reports else None
         sources = [source_out(r) for r in source_rows]
         claims = [claim_out(r) for r in claim_rows]
+        queries = [run_query_out(r) for r in query_rows]
+        asks = [ask_answer_out(r) for r in ask_rows]
 
     return {
         "project": _project_out(project_row),
@@ -280,6 +330,8 @@ async def get_project_endpoint(pid: int) -> dict:
         "reports": reports,
         "sources": sources,
         "claims": claims,
+        "queries": queries,
+        "asks": asks,
     }
 
 

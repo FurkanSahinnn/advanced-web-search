@@ -25,6 +25,7 @@ from typing import Any
 
 from ...config import get_settings
 from ...db import repositories
+from ...embeddings import reranker
 from ...llm.provider import chat_json
 from ...retrieval import vector_store
 from ...retrieval.dedup import dedup_candidates
@@ -152,6 +153,19 @@ async def researcher(state: dict) -> dict:
             if sid in pool and sid not in already
         ]
 
+    # Entailment-driven re-research (verifier -> researcher): subtopics whose
+    # claims their cited sources did NOT support. We re-research them ON PURPOSE,
+    # so unlike the gap loop these bypass the "already researched" filter. Merged
+    # by id so a subtopic is never queued twice in one round.
+    reresearch_ids = state.get("reresearch_subtopic_ids") or []
+    if reresearch_ids:
+        full_pool = {s.get("id"): s for s in subtopics}
+        seen_ids = {s.get("id") for s in to_research}
+        for sid in reresearch_ids:
+            if sid in full_pool and sid not in seen_ids:
+                to_research.append(full_pool[sid])
+                seen_ids.add(sid)
+
     researched_ids: list[int] = []
 
     async def research_one(st: dict) -> list[dict]:
@@ -189,6 +203,8 @@ async def researcher(state: dict) -> dict:
         except Exception:
             pass
 
+        # (query string -> raw hits) for the persisted research trail
+        query_hits: list[tuple[str, int]] = []
         try:
             if len(queries) == 1:
                 cands = await registry.search_all(
@@ -197,6 +213,7 @@ async def researcher(state: dict) -> dict:
                     per_provider_limit=per_provider_limit,
                     language=language,
                 )
+                query_hits.append((queries[0], len(cands or [])))
             else:
                 batches = await asyncio.gather(
                     *(
@@ -211,20 +228,56 @@ async def researcher(state: dict) -> dict:
                     return_exceptions=True,
                 )
                 cands = []
-                for b in batches:
+                for qq, b in zip(queries, batches):
                     if isinstance(b, BaseException) or not b:
+                        query_hits.append((qq, 0))
                         continue
                     cands.extend(b)
+                    query_hits.append((qq, len(b)))
         except Exception as exc:
             return [{"__error__": f"researcher[{sid_topic}]: search_all failed: {exc}"}]
+
+        # Persist + stream the issued queries (research trail). Best-effort.
+        await _record_queries(run_id, sid_topic, research_round, query_hits)
 
         try:
             cands = dedup_candidates(cands)
         except Exception:
             pass
+
+        # --- relevance-rank BEFORE the budget cap ---
+        # The cap below keeps only ``max_sources`` candidates. Done on raw
+        # provider/dedup order it keeps the FIRST n, silently dropping genuinely
+        # relevant hits an arbitrary provider happened to rank low. The
+        # cross-encoder reranker is the same signal the ranker node trusts, so we
+        # score candidates against the sub-question and keep the BEST n instead.
+        # Every downstream step (full-text fetch, indexing, scoring, synthesis,
+        # verification) then inherits a relevance-ordered slice, and the
+        # full-text budget below spends on the most-relevant web hits because the
+        # loop now iterates this sorted list. Only pay the rerank cost when the
+        # cap would actually drop something; identity-mode rerank preserves order,
+        # so this degrades to today's behaviour when no real model is loaded.
+        if len(cands) > max_sources:
+            try:
+                docs = [
+                    f"{getattr(c, 'title', '') or ''}. "
+                    f"{getattr(c, 'abstract', '') or ''}".strip()
+                    for c in cands
+                ]
+                scores = await reranker.arerank(q, docs)
+                if len(scores) == len(cands):
+                    cands = [
+                        c for c, _ in sorted(
+                            zip(cands, scores), key=lambda cs: cs[1], reverse=True
+                        )
+                    ]
+                    emit("log", run_id, node="researcher",
+                         message=f"reranked {len(docs)} candidates -> keep top {max_sources}")
+            except Exception:
+                pass  # degrade to provider order; the cap still applies
         cands = cands[:max_sources]
 
-        # Fetch full text for the first ~6 web candidates.
+        # Fetch full text for the top ~6 web candidates (now relevance-ordered).
         web_done = 0
         for cand in cands:
             if web_done >= _FULLTEXT_WEB_LIMIT:
@@ -310,10 +363,32 @@ async def researcher(state: dict) -> dict:
         # consumed this round — clear so the loop bookkeeping stays clean
         "snowball_seed_ids": [],
         "gap_subtopic_ids": [],
+        "reresearch_subtopic_ids": [],
     }
     if errors:
         out["errors"] = errors
     return out
+
+
+async def _record_queries(run_id: int, subtopic_id, research_round: int,
+                          query_hits: list[tuple[str, int]]) -> None:
+    """Persist + stream the issued search queries for the research trail.
+
+    Fully defensive: a telemetry failure must never derail retrieval.
+    """
+    for q, hits in query_hits:
+        if not q:
+            continue
+        try:
+            await asyncio.to_thread(
+                repositories.add_run_query, run_id, subtopic_id, research_round, q, hits
+            )
+        except Exception:
+            # Skip the live frame too, so the streamed trail never shows a query
+            # that the reopened (DB-reconstructed) trail will be missing.
+            continue
+        emit("query", run_id, node="researcher",
+             subtopic_id=subtopic_id, round=research_round, query=q, hits=hits)
 
 
 async def _enrich_academic_fulltext(cands: list, run_id: int | None = None) -> None:

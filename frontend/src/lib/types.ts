@@ -76,13 +76,22 @@ export interface SourceOut {
   score: ScoreBreakdown | null;
 }
 
+export type CitationVerdict =
+  | "supported"
+  | "partial"
+  | "unsupported"
+  | "unverifiable";
+
 export interface CitationOut {
   id: number;
   source_id: number;
   stance: string; // supporting | refuting | neutral
   supporting_quote: string | null;
-  verified: boolean;
+  verified: boolean; // link liveness (NOT entailment)
   dead_link: boolean;
+  // Claim<->source entailment verdict; null until verified.
+  support?: CitationVerdict | string | null;
+  support_score?: number | null;
 }
 
 export interface ClaimOut {
@@ -93,6 +102,18 @@ export interface ClaimOut {
   citations: CitationOut[];
 }
 
+// Post-verification entailment breakdown: claims counted by their best citation
+// verdict. `grounded` = supported|partial; `share` is also written onto certainty.
+export interface ReportGrounding {
+  supported: number;
+  partial: number;
+  unsupported: number;
+  unverifiable: number;
+  graded: number;
+  grounded: number;
+  share: number;
+}
+
 export interface ReportOut {
   id: number;
   run_id: number;
@@ -100,12 +121,30 @@ export interface ReportOut {
   language: string;
   ord?: number;
   consensus_summary: string | null;
+  // Where the sources conflict / are uncertain (counterpart to consensus).
+  // Empty/absent for older runs or when nothing notable was surfaced.
+  disagreements?: string | null;
   comprehensiveness: number | null;
   certainty: number | null;
   // Source ids in [n] citation order (index 0 == inline marker [1]). Lets the
   // UI resolve a citation marker to the exact source. Empty for older runs.
   references?: number[];
+  // Per-verdict claim-grounding breakdown (post-verification). Absent for older
+  // runs or before the verifier has run.
+  grounding?: ReportGrounding | null;
   created_at: string;
+}
+
+// One grounded follow-up answer over a run's own sources (Ask-the-Report).
+export interface AskAnswer {
+  id: number;
+  question: string;
+  answer: string;
+  // Source ids in [n] order (index 0 == inline marker [1]). Empty when ungrounded.
+  references: number[];
+  // False when no relevant source text was found (the answer says so).
+  grounded: boolean;
+  created_at?: string | null;
 }
 
 export interface RunOut {
@@ -116,6 +155,15 @@ export interface RunOut {
   error: string | null;
   started_at: string;
   finished_at: string | null;
+}
+
+export interface RunQueryOut {
+  id: number;
+  subtopic_id: number | null;
+  round: number;
+  query: string;
+  hits: number;
+  created_at?: string | null;
 }
 
 // ----- Settings / hardware / LLM status -----
@@ -258,10 +306,12 @@ export type EventType =
   | "awaiting_approval"
   | "source_found"
   | "source_scored"
+  | "query"
   | "claim"
   | "citation_verified"
   | "token"
   | "report"
+  | "report_grounding"
   | "run_finished"
   | "error"
   | "log";
@@ -294,6 +344,8 @@ export interface ProjectDetail {
   reports: ReportOut[];
   sources: SourceOut[];
   claims: ClaimOut[];
+  queries?: RunQueryOut[];
+  asks?: AskAnswer[];
 }
 
 export interface CreateProjectResponse {

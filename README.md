@@ -63,7 +63,8 @@ re-check their own citations, and keep none of it on your machine.
 | **Quality over popularity** | Every kept source is scored on five transparent signals (relevance, authority, recency, citation impact, evidence type) and shows a *"why kept"* breakdown — never an opaque rank. |
 | **Academic + web, in parallel** | Fans out across keyless web search **and** seven academic databases (OpenAlex, Crossref, arXiv, Europe PMC, Semantic Scholar, DOAJ, PubMed) at once. |
 | **Steerable** | A human-in-the-loop **approval gate** lets you edit the nested sub-topic plan *before* expensive retrieval runs. |
-| **Self-checking** | An **adversarial verifier** re-reads every cited source and labels it *supports / contradicts / dead link* — unsupported claims are sent back for revision. |
+| **Self-checking** | An **adversarial verifier** checks each inline citation against the source's *actual text* (embedding prefilter + LLM entailment) and labels it *supported / partial / unsupported / unverifiable* — kept separate from link-liveness — sending unsupported claims back for revision. |
+| **Conflict-aware & traceable** | The report surfaces where sources **disagree** (not only where they agree), warns when evidence concentrates in a single **domain** (echo-chamber), and exposes a full **research trail** of every query issued and every source kept or dropped. |
 | **Multilingual** | Local `bge-m3` embeddings with strong **Turkish** support; bilingual TR/EN UI; reports can be generated in **one or several languages in parallel**. |
 | **Persistent** | Projects, runs, sources, claims and reports are saved in SQLite and revisitable — nothing is thrown away after a query. |
 | **One command, Windows-first** | `./start.ps1` (or `./start.sh`) installs, builds and launches. No curl-pipe-bash, no wizard. |
@@ -101,8 +102,8 @@ advanced-web-search/
 │       │       ├── researcher.py   #     parallel fan-out + query expansion + full-text
 │       │       ├── ranker.py       #     multi-signal scoring + filtering
 │       │       ├── gap.py          #     gap analysis → loop back for more rounds
-│       │       ├── synthesizer.py  #     writes the cited report (multi-language, parallel)
-│       │       ├── verifier.py     #     adversarial citation re-check
+│       │       ├── synthesizer.py  #     writes the cited report (multi-lang) + consensus/disagreements
+│       │       ├── verifier.py     #     adversarial re-check: link-liveness + claim entailment
 │       │       └── finalizer.py    #     packages + finishes the run
 │       ├── sources/                # search providers (base + registry + 13 providers)
 │       │   ├── web_*.py            #   DuckDuckGo, SearXNG, Tavily, Brave
@@ -125,7 +126,7 @@ advanced-web-search/
 │   └── src/                        # React 19 + Vite + Tailwind single-page app
 │       ├── pages/                  #   Home, Research, Settings, About (project structure)
 │       ├── components/             #   AgentTrace, TopicGraph, SourceTable, ReportView,
-│       │   │                       #   ExportMenu, ApprovalPanel, ScoreWeights, …
+│       │   │                       #   ResearchTrail, SourceDiversity, ExportMenu, ApprovalPanel, …
 │       │   └── ui/                 #   small design-system primitives (button, card, …)
 │       └── lib/                    #   api client, SSE stream, i18n, types, languages
 ├── scripts/                        # dev.py (concurrent backend+frontend hot reload)

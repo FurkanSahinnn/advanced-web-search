@@ -65,7 +65,8 @@ atıflarını nadiren yeniden denetler ve hiçbirini sizin makinenizde tutmaz.
 | **Popülerlik değil, kalite** | Tutulan her kaynak beş şeffaf sinyalle puanlanır (ilgililik, otorite, güncellik, atıf etkisi, kanıt türü) ve bir *"neden tutuldu"* dökümü gösterir — asla kapalı bir sıralama değil. |
 | **Akademik + web, paralel** | Anahtarsız web araması **ve** yedi akademik veritabanı (OpenAlex, Crossref, arXiv, Europe PMC, Semantic Scholar, DOAJ, PubMed) aynı anda taranır. |
 | **Yönlendirilebilir** | İnsan-döngüde **onay kapısı**, pahalı arama başlamadan *önce* iç içe alt-konu planını düzenlemenize izin verir. |
-| **Kendini denetleyen** | **Çelişkili (adversarial) doğrulayıcı**, atıf yapılan her kaynağı yeniden okur ve *destekliyor / çelişiyor / ölü bağlantı* olarak etiketler — desteksiz iddialar revizyona geri gönderilir. |
+| **Kendini denetleyen** | **Çelişkili (adversarial) doğrulayıcı**, her satır-içi atfı kaynağın *gerçek metniyle* karşılaştırır (embedding ön-elemesi + LLM entailment) ve *destekleniyor / kısmen / desteklenmiyor / doğrulanamaz* olarak etiketler — bağlantı canlılığından ayrı tutulur — desteksiz iddialar revizyona geri gönderilir. |
+| **Çelişkiye duyarlı & izlenebilir** | Rapor, kaynakların yalnızca uzlaştığı değil **çeliştiği** yerleri de gösterir; kanıt tek bir **alan adında** yoğunlaşınca (eko-oda) uyarır; ve atılan her sorgunun, tutulan/elenen her kaynağın tam bir **araştırma izini** sunar. |
 | **Çok dilli** | Güçlü **Türkçe** desteğiyle yerel `bge-m3` embedding'leri; iki dilli TR/EN arayüz; raporlar **bir veya birden çok dilde paralel** üretilebilir. |
 | **Kalıcı** | Projeler, çalıştırmalar, kaynaklar, iddialar ve raporlar SQLite'ta saklanır ve tekrar açılabilir — bir sorgudan sonra hiçbir şey atılmaz. |
 | **Tek komut, Windows-öncelikli** | `./start.ps1` (veya `./start.sh`) kurar, derler ve başlatır. curl-pipe-bash yok, sihirbaz yok. |
@@ -103,8 +104,8 @@ advanced-web-search/
 │       │       ├── researcher.py   #     paralel fan-out + sorgu genişletme + tam metin
 │       │       ├── ranker.py       #     çok-sinyalli puanlama + filtreleme
 │       │       ├── gap.py          #     eksik analizi → yeni tur için geri döngü
-│       │       ├── synthesizer.py  #     atıflı raporu yazar (çoklu-dil, paralel)
-│       │       ├── verifier.py     #     çelişkili atıf yeniden denetimi
+│       │       ├── synthesizer.py  #     atıflı raporu yazar (çoklu-dil) + uzlaşı/anlaşmazlıklar
+│       │       ├── verifier.py     #     çelişkili yeniden denetim: bağlantı canlılığı + iddia entailment
 │       │       └── finalizer.py    #     paketler + çalıştırmayı bitirir
 │       ├── sources/                # arama sağlayıcıları (base + registry + 13 sağlayıcı)
 │       │   ├── web_*.py            #   DuckDuckGo, SearXNG, Tavily, Brave
@@ -127,7 +128,7 @@ advanced-web-search/
 │   └── src/                        # React 19 + Vite + Tailwind tek-sayfa uygulama
 │       ├── pages/                  #   Home, Research, Settings, About (proje yapısı)
 │       ├── components/             #   AgentTrace, TopicGraph, SourceTable, ReportView,
-│       │   │                       #   ExportMenu, ApprovalPanel, ScoreWeights, …
+│       │   │                       #   ResearchTrail, SourceDiversity, ExportMenu, ApprovalPanel, …
 │       │   └── ui/                 #   küçük tasarım-sistemi parçaları (button, card, …)
 │       └── lib/                    #   api istemcisi, SSE akışı, i18n, tipler, diller
 ├── scripts/                        # dev.py (eşzamanlı backend+frontend hot reload)

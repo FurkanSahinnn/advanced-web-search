@@ -39,8 +39,21 @@ _lock = asyncio.Lock()
 
 
 def route_after_verify(state: ResearchState) -> str:
-    """Loop back to synthesis on a fatal verdict, else finalize."""
-    return "synthesizer" if state.get("verifier_fatal") else "finalizer"
+    """Route after verification (both branches are capped by the verifier node).
+
+      * fatal (a claim whose citations are ALL dead links) -> re-synthesize.
+      * needs-evidence (a claim its cited sources actively fail to support) ->
+        re-research that subtopic to find evidence that backs/refutes it.
+      * otherwise -> finalize.
+
+    Fatal takes precedence: a dead-link claim can't be fixed by more retrieval of
+    the same kind, so it re-synthesizes first.
+    """
+    if state.get("verifier_fatal"):
+        return "synthesizer"
+    if state.get("verifier_needs_evidence"):
+        return "researcher"
+    return "finalizer"
 
 
 def route_after_gap(state: ResearchState) -> str:
@@ -82,7 +95,7 @@ def _build_state_graph():
     g.add_conditional_edges(
         "verifier",
         route_after_verify,
-        {"synthesizer": "synthesizer", "finalizer": "finalizer"},
+        {"synthesizer": "synthesizer", "researcher": "researcher", "finalizer": "finalizer"},
     )
     g.add_edge("finalizer", END)
     return g

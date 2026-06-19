@@ -60,6 +60,13 @@ class ResearchState(TypedDict, total=False):
     gap_subtopic_ids: list[int]            # sub-questions to (re)search this round
     snowball_seed_ids: list[int]           # source ids to expand citations from
     needs_more_research: bool
+    # Entailment-driven re-research: subtopics whose claims the verifier found
+    # unsupported by their cited sources, routed back to the researcher to find
+    # evidence that actually backs (or refutes) them. `reresearch_subtopic_ids`
+    # is the queue for the next pass; `reresearched_subtopic_ids` accumulates the
+    # ones already retried so a subtopic is re-researched at most once (no thrash).
+    reresearch_subtopic_ids: list[int]
+    reresearched_subtopic_ids: Annotated[list[int], _add]
 
     # --- planning ---
     subtopics: list[dict[str, Any]]   # flat nodes: {id,parent_id,question,perspective,approved,depth,ord}
@@ -75,12 +82,14 @@ class ResearchState(TypedDict, total=False):
     claims: list[dict[str, Any]]           # {text, subtopic_id, citations:[{source_id,...}]}
     report_markdown: str
     consensus_summary: str
+    disagreements: str
     comprehensiveness: float
     certainty: float
 
     # --- verification loop ---
     verifier_iteration: int
     verifier_fatal: bool
+    verifier_needs_evidence: bool          # route verifier -> researcher for re-research
     verifier_notes: list[dict[str, Any]]
 
     # --- bookkeeping ---
@@ -136,6 +145,8 @@ def initial_state(
         gap_subtopic_ids=[],
         snowball_seed_ids=[],
         needs_more_research=False,
+        reresearch_subtopic_ids=[],
+        reresearched_subtopic_ids=[],
         subtopics=[],
         extra_instructions="",
         candidates=[],
@@ -143,10 +154,12 @@ def initial_state(
         claims=[],
         report_markdown="",
         consensus_summary="",
+        disagreements="",
         comprehensiveness=0.0,
         certainty=0.0,
         verifier_iteration=0,
         verifier_fatal=False,
+        verifier_needs_evidence=False,
         verifier_notes=[],
         errors=[],
     )
