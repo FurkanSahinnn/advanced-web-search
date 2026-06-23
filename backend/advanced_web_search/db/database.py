@@ -186,6 +186,12 @@ def _apply_migrations(conn) -> None:
     # just their retrieval scores). Older rows stay NULL and fall back gracefully.
     if "grounding" not in rcols:
         conn.execute("ALTER TABLE reports ADD COLUMN grounding TEXT")
+    # `quality`: post-verification reference-free quality scorecard JSON
+    # (groundedness, citation precision/coverage, answer relevance, source
+    # diversity, reranker_degraded, overall). A glanceable self-assessment;
+    # written by the verifier. Older rows stay NULL and the UI just omits it.
+    if "quality" not in rcols:
+        conn.execute("ALTER TABLE reports ADD COLUMN quality TEXT")
     conn.execute("CREATE INDEX IF NOT EXISTS ix_reports_run_lang ON reports(run_id, language)")
 
     # Citation entailment verdict (claim actually supported by the cited source),

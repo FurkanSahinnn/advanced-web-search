@@ -227,6 +227,7 @@ export function AgentTrace({
 }
 
 function NodeDetail({ group }: { group: NodeGroup }) {
+  const { t } = useLang();
   const counts = useMemo(() => {
     const c = {
       subtopic: 0,
@@ -259,22 +260,43 @@ function NodeDetail({ group }: { group: NodeGroup }) {
     return null;
   }, [group.events]);
 
+  // A ranker `log` frame carries data.degraded when the cross-encoder reranker
+  // fell back to identity mode and the relevance ranking collapsed to source
+  // order — surface it so the quality drop isn't silent.
+  const degraded = useMemo(
+    () =>
+      group.events.some(
+        (e) => e.type === "log" && Boolean((e.data as Record<string, unknown>)?.degraded),
+      ),
+    [group.events],
+  );
+
   const chips: string[] = [];
-  if (counts.subtopic) chips.push(`${counts.subtopic} alt-soru`);
-  if (counts.source_found) chips.push(`${counts.source_found} kaynak`);
+  if (counts.subtopic)
+    chips.push(`${counts.subtopic} ${t("trace.chip.subtopic")}`);
+  if (counts.source_found)
+    chips.push(`${counts.source_found} ${t("trace.chip.source")}`);
   if (counts.source_scored)
-    chips.push(`${counts.kept}/${counts.source_scored} tutuldu`);
-  if (counts.claim) chips.push(`${counts.claim} iddia`);
-  if (counts.verified) chips.push(`${counts.verified} doğrulandı`);
-  if (counts.tokens) chips.push(`${counts.tokens} token`);
+    chips.push(`${counts.kept}/${counts.source_scored} ${t("trace.chip.kept")}`);
+  if (counts.claim) chips.push(`${counts.claim} ${t("trace.chip.claim")}`);
+  if (counts.verified) chips.push(`${counts.verified} ${t("trace.chip.verified")}`);
+  if (counts.tokens) chips.push(`${counts.tokens} ${t("trace.chip.token")}`);
 
   return (
     <div className="mt-0.5 space-y-1">
-      {chips.length > 0 && (
+      {(chips.length > 0 || degraded) && (
         <div className="flex flex-wrap gap-x-2 gap-y-0.5 text-[11px] text-[var(--color-muted)]">
           {chips.map((c, i) => (
             <span key={i}>{c}</span>
           ))}
+          {degraded && (
+            <span
+              className="inline-flex items-center gap-1 text-[var(--color-warn)]"
+              title={t("quality.degraded")}
+            >
+              <AlertTriangle size={11} /> {t("trace.chip.degraded")}
+            </span>
+          )}
         </div>
       )}
       {lastMsg && (

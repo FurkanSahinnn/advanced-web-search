@@ -392,6 +392,18 @@ def update_report_grounding(run_id: int, certainty: Optional[float],
         )
 
 
+def update_report_quality(run_id: int, quality: Optional[dict]) -> None:
+    """Patch the post-verification quality scorecard onto a run's reports.
+
+    Like ``update_report_grounding``, the verifier runs after the synthesizer
+    saved the rows, so it writes the reference-free quality scorecard JSON onto
+    every language row of the run. ``quality=None`` clears it (rare).
+    """
+    q_json = json.dumps(quality, ensure_ascii=False) if quality is not None else None
+    with tx() as c:
+        c.execute("UPDATE reports SET quality=? WHERE run_id=?", (q_json, run_id))
+
+
 def get_report(run_id: int, language: Optional[str] = None) -> Optional[dict]:
     """Latest report for a run. With ``language`` -> that language's latest row;
     without -> the primary report (lowest ``ord``, then newest)."""

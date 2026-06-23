@@ -86,26 +86,38 @@ DEFAULT_SCORE_WEIGHTS: dict[str, float] = {
 # provider so a long report is never rejected with a 400 — DeepSeek's 8192 is
 # the lowest cap among them (Claude Haiku 4.5 allows far more). The old
 # hard-coded 4000 truncated long reports mid-section.
+# Two deeper-quality knobs ride along on the preset (the project's "one user
+# choice drives everything" convention):
+#   self_refine  -> run a reflect-then-revise (Self-Refine) critic pass over the
+#                   synthesized report before claim extraction. Off for the fast
+#                   presets (extra LLM calls); on for deep/exhaustive.
+#   entail_votes -> how many independent samples the verifier draws per
+#                   (claim, passage) entailment judgement, taking the majority
+#                   verdict (self-consistency). 1 = today's single-sample path.
 DEPTH_PRESETS: dict[str, dict] = {
     "quick": {
         "max_subtopics": 4, "results_per_source": 6, "max_sources_per_subtopic": 12,
         "max_research_rounds": 1, "snowball": False, "snowball_top_k": 0,
         "bilingual": False, "recursion_depth": 1, "report_max_tokens": 4000,
+        "self_refine": False, "entail_votes": 1, "query_variants": 1,
     },
     "standard": {
         "max_subtopics": 8, "results_per_source": 8, "max_sources_per_subtopic": 20,
         "max_research_rounds": 2, "snowball": False, "snowball_top_k": 0,
         "bilingual": True, "recursion_depth": 1, "report_max_tokens": 6000,
+        "self_refine": False, "entail_votes": 1, "query_variants": 3,
     },
     "deep": {
         "max_subtopics": 12, "results_per_source": 10, "max_sources_per_subtopic": 30,
         "max_research_rounds": 3, "snowball": True, "snowball_top_k": 8,
         "bilingual": True, "recursion_depth": 2, "report_max_tokens": 8000,
+        "self_refine": True, "entail_votes": 3, "query_variants": 3,
     },
     "exhaustive": {
         "max_subtopics": 18, "results_per_source": 12, "max_sources_per_subtopic": 45,
         "max_research_rounds": 4, "snowball": True, "snowball_top_k": 15,
         "bilingual": True, "recursion_depth": 2, "report_max_tokens": 8000,
+        "self_refine": True, "entail_votes": 3, "query_variants": 3,
     },
 }
 DEFAULT_DEPTH = "quick"

@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
-from typing import Any
 
 from ...config import get_settings
 from ...db import repositories
@@ -56,12 +55,15 @@ async def expand_queries(
     bilingual: bool,
     model_role: str = "moderator",
 ) -> list[str]:
-    """Return [question] plus up to n-1 query variants.
+    """Return [question] plus up to n-1 query variants (multi-query expansion).
 
-    When ``bilingual`` is on, the variants include a translation into the OTHER
-    language (tr<->en, detected from the question) plus a paraphrase. Implemented
-    via a single chat_json call; on ANY failure returns just ``[question]``.
-    Deduped and capped to ``n``.
+    The variants always include close paraphrases plus ONE "step-back" broader
+    query (the abstraction the question is an instance of), which widens recall;
+    when ``bilingual`` is on they additionally include a faithful translation
+    into the OTHER language (tr<->en, detected from the question). Searching each
+    variant and indexing the union feeds the existing RRF hybrid retrieval a
+    richer chunk corpus. Implemented via a single chat_json call; on ANY failure
+    returns just ``[question]``. Deduped and capped to ``n``.
     """
     base = (question or "").strip()
     if not base:
@@ -70,7 +72,7 @@ async def expand_queries(
         n = int(n)
     except Exception:
         n = 1
-    if n <= 1 or not bilingual:
+    if n <= 1:
         return [base]
 
     try:
@@ -83,10 +85,15 @@ async def expand_queries(
         "You expand a search sub-question into a few alternative search queries "
         "for a research engine. Keep them faithful to the original intent."
     )
+    translate_line = (
+        f"- exactly one faithful translation into '{other}',\n" if bilingual else ""
+    )
     user = (
         f"ORIGINAL QUESTION (language={lang}):\n{base}\n\n"
         f"Produce up to {max(1, n - 1)} ALTERNATIVE search queries:\n"
-        f"- exactly one faithful translation into '{other}',\n"
+        f"{translate_line}"
+        "- one 'step-back' broader query: the more general topic this question is "
+        "an instance of (widens recall),\n"
         "- one or more close paraphrases in the original language.\n\n"
         'Return ONLY JSON: {"queries": [str, ...]}. No prose, no code fences.'
     )
@@ -175,9 +182,11 @@ async def researcher(state: dict) -> dict:
         if not q:
             return collected
 
-        # --- query expansion (feature d) ---
+        # --- multi-query expansion (paraphrase + step-back, +translation when
+        # bilingual). Now fires for monolingual runs too: any run with
+        # query_variants > 1 widens recall, not just bilingual ones. ---
         queries = [q]
-        if bilingual and query_variants > 1:
+        if query_variants > 1:
             try:
                 queries = await expand_queries(
                     q, language or "auto", query_variants, bilingual

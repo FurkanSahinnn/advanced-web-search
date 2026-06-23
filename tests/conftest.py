@@ -116,6 +116,15 @@ def _messages_text(messages) -> str:
 async def _fake_chat_json(role, messages, *, temperature=0.2, max_tokens=None, retries=2):
     text = _messages_text(messages)
 
+    # Verifier entailment judge: {"verdict": ..., "quote": ...}
+    if "SOURCE PASSAGE" in text or "supports a CLAIM" in text:
+        return {"verdict": "supported", "quote": "a short backing quote"}
+
+    # Synthesizer Self-Refine critique: {"issues": [...]} — return none so the
+    # deterministic test report is never rewritten by the revise pass.
+    if "Critique the DRAFT" in text:
+        return {"issues": []}
+
     # Researcher query-expansion: {"queries":[...]}
     if "ALTERNATIVE search queries" in text or '"queries"' in text and "translation" in text:
         return {"queries": ["alt query one", "alt query two"]}
@@ -321,6 +330,9 @@ def patch_seams(monkeypatch):
     monkeypatch.setattr(synth_node, "chat_json", _fake_chat_json)
     monkeypatch.setattr(synth_node, "chat_stream", _fake_chat_stream)
     monkeypatch.setattr(synth_node, "chat", _fake_chat)
+    # Verifier imported chat_json directly; fake it so entailment stays offline
+    # and deterministic (incl. the multi-sample self-consistency path).
+    monkeypatch.setattr(verifier_node, "chat_json", _fake_chat_json)
 
     # Sources: researcher uses `registry.search_all`
     monkeypatch.setattr(researcher_node.registry, "search_all", _fake_search_all)
@@ -337,6 +349,7 @@ def patch_seams(monkeypatch):
 
     # HTTP
     monkeypatch.setattr(researcher_node, "fetch_text", _fake_fetch_text)
+    monkeypatch.setattr(verifier_node, "fetch_text", _fake_fetch_text)
     monkeypatch.setattr(verifier_node, "check_url_alive", _fake_check_url_alive)
     monkeypatch.setattr(http, "fetch_text", _fake_fetch_text)
     monkeypatch.setattr(http, "fetch_bytes", _fake_fetch_bytes)

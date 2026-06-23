@@ -21,6 +21,7 @@ from ..models.schemas import (
     ProjectOut,
     ReportGrounding,
     ReportOut,
+    ReportQuality,
     RunOut,
     RunQueryOut,
     ScoreBreakdown,
@@ -175,6 +176,13 @@ def report_out(row: dict) -> ReportOut:
             grounding = ReportGrounding(**raw_g)
         except Exception:
             grounding = None
+    quality: Optional[ReportQuality] = None
+    raw_q = _parse_json(row.get("quality"), None)
+    if isinstance(raw_q, dict):
+        try:
+            quality = ReportQuality(**raw_q)
+        except Exception:
+            quality = None
     return ReportOut(
         id=int(row["id"]),
         run_id=int(row["run_id"]),
@@ -187,6 +195,7 @@ def report_out(row: dict) -> ReportOut:
         certainty=row.get("certainty"),
         references=references,
         grounding=grounding,
+        quality=quality,
         created_at=str(row.get("created_at") or ""),
     )
 

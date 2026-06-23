@@ -110,6 +110,13 @@ const tr: Dict = {
 
   "trace.waiting": "Olay bekleniyor…",
   "trace.active": "çalışıyor",
+  "trace.chip.subtopic": "alt-soru",
+  "trace.chip.source": "kaynak",
+  "trace.chip.kept": "tutuldu",
+  "trace.chip.claim": "iddia",
+  "trace.chip.verified": "doğrulandı",
+  "trace.chip.token": "token",
+  "trace.chip.degraded": "sıralama bozuldu",
 
   "node.planner": "Planlayıcı",
   "node.moderator": "Moderatör",
@@ -175,6 +182,16 @@ const tr: Dict = {
   "report.grounding": "Kanıt temeli",
   "report.grounded": "iddia kaynaklı",
   "report.language": "Dil",
+
+  "quality.title": "Kalite karnesi",
+  "quality.overall": "Genel",
+  "quality.groundedness": "Kanıt temeli",
+  "quality.precision": "Atıf isabeti",
+  "quality.coverage": "Atıf kapsamı",
+  "quality.relevance": "Soru ilgisi",
+  "quality.diversity": "Kaynak çeşitliliği",
+  "quality.degraded": "İlgi sıralaması bozuldu (reranker yok)",
+  "quality.caveat": "Öz değerlendirme — sertifikalı bir ölçüm değildir.",
 
   "ask.title": "Rapora sor",
   "ask.placeholder": "Bu çalışmanın kaynaklarına dayalı bir soru sorun…",
@@ -557,6 +574,13 @@ const en: Dict = {
 
   "trace.waiting": "Waiting for events…",
   "trace.active": "running",
+  "trace.chip.subtopic": "sub-questions",
+  "trace.chip.source": "sources",
+  "trace.chip.kept": "kept",
+  "trace.chip.claim": "claims",
+  "trace.chip.verified": "verified",
+  "trace.chip.token": "tokens",
+  "trace.chip.degraded": "ranking degraded",
 
   "node.planner": "Planner",
   "node.moderator": "Moderator",
@@ -622,6 +646,16 @@ const en: Dict = {
   "report.grounding": "Grounding",
   "report.grounded": "claims grounded",
   "report.language": "Language",
+
+  "quality.title": "Quality scorecard",
+  "quality.overall": "Overall",
+  "quality.groundedness": "Groundedness",
+  "quality.precision": "Citation precision",
+  "quality.coverage": "Citation coverage",
+  "quality.relevance": "Answer relevance",
+  "quality.diversity": "Source diversity",
+  "quality.degraded": "Relevance ranking degraded (reranker unavailable)",
+  "quality.caveat": "Self-assessment — not a certified metric.",
 
   "ask.title": "Ask the report",
   "ask.placeholder": "Ask a question grounded in this run's sources…",

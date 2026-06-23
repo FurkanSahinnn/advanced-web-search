@@ -77,6 +77,10 @@ class ResearchState(TypedDict, total=False):
 
     # --- ranking ---
     ranked_sources: list[dict[str, Any]]   # kept sources with score breakdown
+    # True when the cross-encoder reranker degraded to identity mode this run, so
+    # the dominant relevance signal collapsed to provider order. Surfaced in the
+    # trace + the report quality scorecard so the quality drop isn't silent.
+    reranker_degraded: bool
 
     # --- synthesis ---
     claims: list[dict[str, Any]]           # {text, subtopic_id, citations:[{source_id,...}]}
@@ -151,6 +155,7 @@ def initial_state(
         extra_instructions="",
         candidates=[],
         ranked_sources=[],
+        reranker_degraded=False,
         claims=[],
         report_markdown="",
         consensus_summary="",

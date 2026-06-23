@@ -154,6 +154,30 @@ class ReportGrounding(BaseModel):
     share: float = 0.0
 
 
+class ReportQuality(BaseModel):
+    """Reference-free, post-verification quality scorecard for a run.
+
+    A glanceable SELF-assessment (not a certification), mostly arithmetic over
+    artifacts the run already produced:
+      groundedness        share of claims their cited sources entail
+      citation_precision  kept sources actually cited / kept sources
+      citation_coverage   claims carrying >=1 citation / claims
+      answer_relevance    cosine(report, root question)
+      source_diversity    unique domains / kept sources
+      reranker_degraded   the relevance ranking collapsed to source order
+      embeddings_degraded answer_relevance couldn't be computed (no embedder)
+      overall             mean of the 0-1 metrics (penalized if degraded)
+    """
+    groundedness: float = 0.0
+    citation_precision: float = 0.0
+    citation_coverage: float = 0.0
+    answer_relevance: float = 0.0
+    source_diversity: float = 0.0
+    reranker_degraded: bool = False
+    embeddings_degraded: bool = False
+    overall: float = 0.0
+
+
 class ReportOut(BaseModel):
     id: int
     run_id: int
@@ -172,6 +196,9 @@ class ReportOut(BaseModel):
     # Per-verdict claim-grounding breakdown, set after verification. None for
     # older runs / before the verifier has run.
     grounding: Optional[ReportGrounding] = None
+    # Reference-free quality scorecard, set after verification. None for older
+    # runs / before the verifier has run.
+    quality: Optional[ReportQuality] = None
     created_at: str
 
 
@@ -361,7 +388,7 @@ EventType = Literal[
     "run_started", "status", "node_started", "node_finished",
     "plan", "subtopic", "awaiting_approval",
     "source_found", "source_scored", "query", "claim", "citation_verified",
-    "token", "report", "report_grounding", "run_finished", "error", "log",
+    "token", "report", "report_grounding", "report_quality", "run_finished", "error", "log",
 ]
 
 

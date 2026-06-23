@@ -12,6 +12,7 @@ import asyncio
 from typing import Any
 
 from ...db import repositories
+from ...embeddings import reranker
 from ...scoring.ranker import score_sources
 from ..events import emit
 
@@ -66,6 +67,7 @@ async def ranker(state: dict) -> dict:
 
     kept_list: list[dict] = []
     errors: list[str] = []
+    scored_any = False
 
     for subtopic_id, group in groups.items():
         query = question_of.get(subtopic_id, "")
@@ -76,6 +78,7 @@ async def ranker(state: dict) -> dict:
                 weights=weights,
                 keep_threshold=keep_threshold,
             )
+            scored_any = True
         except Exception as exc:
             errors.append(f"ranker[{subtopic_id}]: score_sources failed: {exc}")
             continue
@@ -101,7 +104,19 @@ async def ranker(state: dict) -> dict:
                 base["subtopic_id"] = subtopic_id
                 kept_list.append(base)
 
-    out: dict = {"ranked_sources": _dedup_by_id(kept_list)}
+    # Surface a silent quality collapse: if scoring ran the reranker but it had
+    # degraded to identity mode, the dominant 0.40 relevance signal was just
+    # provider order. Read the mode AFTER scoring (a no-op load-free check) and
+    # tell the trace + the report scorecard so the drop isn't invisible. Gate on
+    # scored_any so a run where every group failed to score (reranker never
+    # invoked) isn't mislabeled as degraded.
+    degraded = scored_any and reranker.current_mode() == "identity"
+    if degraded:
+        emit("log", run_id, node="ranker",
+             message="reranker unavailable — relevance ranking degraded to source order",
+             degraded=True)
+
+    out: dict = {"ranked_sources": _dedup_by_id(kept_list), "reranker_degraded": degraded}
     if errors:
         out["errors"] = errors
     return out

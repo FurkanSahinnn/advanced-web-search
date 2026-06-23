@@ -3,6 +3,7 @@ import { streamUrl } from "./api";
 import type {
   ReportGrounding,
   ReportOut,
+  ReportQuality,
   ResearchEvent,
   RunQueryOut,
   ScoreBreakdown,
@@ -231,6 +232,21 @@ export function useRunStream(runId: number | null): RunStreamState {
           return next;
         });
         setReport((cur) => (cur ? patch(cur) : cur));
+        break;
+      }
+      case "report_quality": {
+        // Verifier also emits the reference-free quality scorecard; patch it
+        // onto every language's report in place so it shows without a refetch.
+        const quality = ev.data?.quality as ReportQuality | undefined;
+        if (quality) {
+          const patchQ = (r: ReportOut): ReportOut => ({ ...r, quality });
+          setReports((prev) => {
+            const next = new Map(prev);
+            for (const [lang, r] of next) next.set(lang, patchQ(r));
+            return next;
+          });
+          setReport((cur) => (cur ? patchQ(cur) : cur));
+        }
         break;
       }
       case "run_finished": {

@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import Any, Optional
+from typing import Any
 
 from ...config import (
     DEFAULT_REPORT_LANGUAGE,
@@ -203,6 +203,35 @@ async def synthesizer(state: dict) -> dict:
         md = (md or "").strip() or f"# {root_query}\n\n_No report could be generated._"
         markdown_by_lang[lang] = md
     report_markdown = markdown_by_lang[primary]   # primary drives claims + return state
+
+    # --- reflect-then-revise (Self-Refine), preset-gated ---
+    # A bounded critique+revise pass over each language's draft BEFORE claim
+    # extraction, so claims/grounding are computed over the improved report.
+    # Gated to deeper presets (extra LLM calls); a persisted override wins.
+    self_refine = bool(depth_preset(state.get("depth")).get("self_refine"))
+    try:
+        ov = await asyncio.to_thread(repositories.get_setting, "report_self_refine")
+        if ov is not None:
+            self_refine = bool(ov)
+    except Exception:
+        pass
+    if self_refine:
+        emit("log", run_id, node="synthesizer", message="self-refine: critiquing & revising…")
+        refined = await asyncio.gather(
+            *[
+                _reflect_revise(
+                    markdown_by_lang[lang], lang, root_query=root_query,
+                    sub_lines=sub_lines, source_block=source_block,
+                    system=system, max_tokens=report_max_tokens,
+                )
+                for lang in languages
+            ],
+            return_exceptions=True,
+        )
+        for lang, rv in zip(languages, refined):
+            if isinstance(rv, str) and rv.strip():
+                markdown_by_lang[lang] = rv
+        report_markdown = markdown_by_lang[primary]
 
     # --- extract claims (structured) ---
     claims: list[dict] = []
@@ -422,6 +451,80 @@ async def _extract_consensus_disagreements(markdown: str, lang_code: str) -> tup
     if not consensus:
         consensus = _extract_consensus(markdown)
     return consensus.strip(), disagreements.strip()
+
+
+async def _reflect_revise(
+    markdown: str, lang_code: str, *, root_query: str, sub_lines: str,
+    source_block: str, system: str, max_tokens: int,
+) -> str:
+    """Self-Refine: critique the draft, then revise it once if issues are found.
+
+    A bounded reflect-then-revise pass (gated to deeper presets by the caller).
+    First a structured critique lists concrete, fixable problems (unanswered
+    sub-questions, contradictions, uncited factual sentences, over-claiming); if
+    any are found, ONE revision pass fixes them while preserving the prose and the
+    [n] citations. Returns the revised markdown, or the original unchanged on no
+    issues / any failure / a degenerate (gutted) revision.
+    """
+    if not markdown:
+        return markdown
+    lang = language_name(lang_code)
+    crit_system = (
+        "You are a meticulous research editor. You critique a draft research "
+        "report and output strict JSON only — no prose, no code fences."
+    )
+    crit_user = (
+        f"RESEARCH QUESTION:\n{root_query}\n\n"
+        f"QUESTIONS THAT MUST BE COVERED:\n{sub_lines}\n\n"
+        "Critique the DRAFT below and list ONLY concrete, fixable problems:\n"
+        "- a listed question left unanswered,\n"
+        "- internal contradictions or claims that conflict with each other,\n"
+        "- factual sentences with no inline [n] citation marker,\n"
+        "- over-claiming or vague hedging that the sources do not justify.\n"
+        'Return JSON: {"issues": [str, ...]}. Use an empty array if the draft is '
+        "already solid — do NOT invent problems.\n\n"
+        f"DRAFT:\n{markdown[:12000]}"
+    )
+    try:
+        raw = await chat_json("synthesizer", [
+            {"role": "system", "content": crit_system},
+            {"role": "user", "content": crit_user},
+        ], max_tokens=600)
+    except Exception:
+        return markdown
+
+    issues: list[str] = []
+    if isinstance(raw, dict):
+        v = raw.get("issues")
+        if isinstance(v, list):
+            issues = [str(x).strip() for x in v if str(x or "").strip()]
+    elif isinstance(raw, list):
+        issues = [str(x).strip() for x in raw if str(x or "").strip()]
+    if not issues:
+        return markdown
+
+    fixes = "\n".join(f"- {s}" for s in issues[:12])
+    rev_user = (
+        f"Revise the report below to FIX these specific problems, changing as "
+        f"little else as possible. Write it entirely in {lang}, keep every valid "
+        "inline [n] citation marker, and cite ONLY the same numbered sources.\n\n"
+        f"PROBLEMS TO FIX:\n{fixes}\n\n"
+        f"NUMBERED SOURCES (cite by their [n]):\n{source_block or '(no sources)'}\n\n"
+        f"REPORT TO REVISE:\n{markdown}"
+    )
+    try:
+        revised = await chat("synthesizer", [
+            {"role": "system", "content": system},
+            {"role": "user", "content": rev_user},
+        ], max_tokens=max_tokens)
+    except Exception:
+        return markdown
+    revised = (revised or "").strip()
+    # Guard: a good revision never guts the report. A drastically shorter result
+    # is a truncated/degenerate response — keep the original instead.
+    if len(revised) < 0.6 * len(markdown):
+        return markdown
+    return revised
 
 
 def _coerce_cd(raw: Any) -> tuple[str, str]:

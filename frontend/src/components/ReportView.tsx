@@ -3,7 +3,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
-import { Lightbulb, Scale } from "lucide-react";
+import { AlertTriangle, Lightbulb, Scale } from "lucide-react";
 import type { CitationVerdict, ReportOut, SourceOut } from "../lib/types";
 import { useLang } from "../lib/i18n";
 import { langKey } from "../lib/languages";
@@ -326,6 +326,56 @@ export function ReportView({
                 </span>
               ) : null,
             )}
+          </div>
+        )}
+
+        {report?.quality && (
+          <div className="mb-5 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-3">
+            <div className="mb-2 flex items-center justify-between">
+              <span className="text-xs font-semibold text-[var(--color-fg)]">
+                {t("quality.title")}
+              </span>
+              <span className="text-[11px] tabular-nums text-[var(--color-muted)]">
+                {t("quality.overall")}{" "}
+                <span className="font-semibold text-[var(--color-fg)]">
+                  {Math.round(report.quality.overall * 100)}%
+                </span>
+              </span>
+            </div>
+            <div className="grid grid-cols-2 gap-x-4 gap-y-2 sm:grid-cols-3">
+              <Meter
+                label={t("quality.groundedness")}
+                value={report.quality.groundedness}
+              />
+              <Meter
+                label={t("quality.precision")}
+                value={report.quality.citation_precision}
+              />
+              <Meter
+                label={t("quality.coverage")}
+                value={report.quality.citation_coverage}
+              />
+              <Meter
+                label={t("quality.relevance")}
+                value={
+                  report.quality.embeddings_degraded
+                    ? null
+                    : report.quality.answer_relevance
+                }
+              />
+              <Meter
+                label={t("quality.diversity")}
+                value={report.quality.source_diversity}
+              />
+            </div>
+            {report.quality.reranker_degraded && (
+              <div className="mt-2 flex items-center gap-1.5 text-[11px] text-[var(--color-warn)]">
+                <AlertTriangle size={12} /> {t("quality.degraded")}
+              </div>
+            )}
+            <p className="mt-2 text-[10px] text-[var(--color-faint)]">
+              {t("quality.caveat")}
+            </p>
           </div>
         )}
 

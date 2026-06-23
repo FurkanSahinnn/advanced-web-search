@@ -114,6 +114,21 @@ export interface ReportGrounding {
   share: number;
 }
 
+// Reference-free, post-verification quality scorecard (RAG-triad / RACE-FACT).
+// A self-assessment, not a certification. All metrics are 0..1.
+export interface ReportQuality {
+  groundedness: number;
+  citation_precision: number;
+  citation_coverage: number;
+  answer_relevance: number;
+  source_diversity: number;
+  reranker_degraded: boolean;
+  // answer_relevance could not be computed (no embedder); the UI shows it as N/A
+  // and it is excluded from `overall`.
+  embeddings_degraded?: boolean;
+  overall: number;
+}
+
 export interface ReportOut {
   id: number;
   run_id: number;
@@ -132,6 +147,9 @@ export interface ReportOut {
   // Per-verdict claim-grounding breakdown (post-verification). Absent for older
   // runs or before the verifier has run.
   grounding?: ReportGrounding | null;
+  // Reference-free quality scorecard (post-verification). Absent for older runs
+  // or before the verifier has run.
+  quality?: ReportQuality | null;
   created_at: string;
 }
 
@@ -366,6 +384,7 @@ export type EventType =
   | "token"
   | "report"
   | "report_grounding"
+  | "report_quality"
   | "run_finished"
   | "error"
   | "log";

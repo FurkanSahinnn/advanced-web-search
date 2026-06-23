@@ -121,6 +121,20 @@ def rerank(query: str, docs: list[str]) -> list[float]:
     return [max(0.0, 1.0 - 0.01 * i) for i in range(n)]
 
 
+def current_mode() -> Optional[str]:
+    """The reranker's current mode WITHOUT forcing a load.
+
+    Returns "cross_encoder" | "identity" | None (never loaded yet). Read this
+    AFTER a rerank call to know whether the dominant relevance signal actually
+    came from a cross-encoder or silently degraded to identity (descending dummy
+    scores) — in which case ranking collapses to provider order and downstream
+    gates should be told. Pure read of the module global; never raises, never
+    triggers a model download (so a test that fakes ``rerank`` sees None here,
+    not a real load).
+    """
+    return _mode
+
+
 async def arerank(query: str, docs: list[str]) -> list[float]:
     """Async wrapper around `rerank` (runs the CPU-bound model in a thread)."""
     try:

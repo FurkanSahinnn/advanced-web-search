@@ -70,6 +70,55 @@ _EVIDENCE_SCORE = {
 
 _HALF_LIFE_YEARS = 3.0
 
+# Cross-encoder relevance is reranked over the source TEXT, not just its title +
+# abstract: when a source has fetched body text, a leading slice is appended so a
+# source with a generic abstract but a strongly on-topic body is not under-scored
+# (the abstract-only doc was the granularity mismatch). Capped to stay within a
+# typical cross-encoder's input window.
+_RERANK_BODY_CHARS = 800
+
+# Adaptive top-k (score-gap / "elbow" cut). After the fixed keep_threshold has
+# decided the kept set, if that set has a clear quality cliff we drop the long
+# tail below it — so an easy sub-question keeps a few strong sources and a broad
+# one keeps more, without a second tuning knob. Guard rails keep it conservative:
+# never cut below MIN_KEEP survivors, and only cut on a genuinely large gap.
+_ADAPTIVE_MIN_KEEP = 4
+_ADAPTIVE_GAP_RATIO = 1.8   # the cut gap must be this much bigger than the mean gap
+_ADAPTIVE_GAP_ABS = 0.08    # ...and at least this large in absolute final_score
+
+
+def _apply_adaptive_cut(results: list[dict], threshold: float) -> None:
+    """Demote the weak tail of the kept set in place when there's a clear elbow.
+
+    Operates only on sources already kept by ``threshold`` (the hard floor), so
+    this can only ever tighten, never resurrect a below-threshold source. Sets
+    ``kept=False`` on the demoted tail. Fully defensive: any anomaly leaves the
+    threshold decision untouched.
+    """
+    try:
+        kept = [r for r in results if (r.get("breakdown") or {}).get("kept")]
+        if len(kept) <= _ADAPTIVE_MIN_KEEP:
+            return
+        kept.sort(key=lambda r: float(r["breakdown"].get("final_score") or 0.0), reverse=True)
+        scores = [float(r["breakdown"].get("final_score") or 0.0) for r in kept]
+        gaps = [scores[i] - scores[i + 1] for i in range(len(scores) - 1)]
+        if not gaps:
+            return
+        mean_gap = sum(gaps) / len(gaps)
+        # Only consider cut points AFTER the first MIN_KEEP survivors so we always
+        # keep at least that many.
+        best_i, best_gap = -1, 0.0
+        for i in range(_ADAPTIVE_MIN_KEEP - 1, len(gaps)):
+            if gaps[i] > best_gap:
+                best_gap, best_i = gaps[i], i
+        if best_i < 0:
+            return
+        if best_gap >= _ADAPTIVE_GAP_ABS and best_gap >= _ADAPTIVE_GAP_RATIO * max(mean_gap, 1e-9):
+            for r in kept[best_i + 1:]:
+                r["breakdown"]["kept"] = False
+    except Exception:
+        return
+
 
 def _host_of(url: Optional[str]) -> str:
     if not url:
@@ -321,7 +370,13 @@ async def score_sources(
     for s in sources:
         title = (s.get("title") or "").strip()
         abstract = (s.get("abstract") or "").strip()
-        docs.append(f"{title}. {abstract}".strip())
+        doc = f"{title}. {abstract}".strip()
+        body = (s.get("full_text") or "").strip()
+        if body:
+            # Append a leading slice of the actual body so the reranker sees the
+            # source's content, not just its (possibly generic) abstract.
+            doc = f"{doc}\n{body[:_RERANK_BODY_CHARS]}".strip()
+        docs.append(doc)
 
     try:
         raw_scores = await reranker.arerank(query or "", docs)
@@ -392,5 +447,8 @@ async def score_sources(
             }
 
         results.append({"source_id": src.get("id"), "breakdown": breakdown})
+
+    # Adaptive top-k: tighten the kept set when it has a clear quality cliff.
+    _apply_adaptive_cut(results, threshold)
 
     return results

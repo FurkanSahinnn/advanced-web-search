@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import Any, AsyncIterator, Optional
+from typing import Any, AsyncIterator
 
 from langgraph.types import Command
 
@@ -112,9 +112,9 @@ def _effective_config() -> dict:
     gap_min_sources = repositories.get_setting("gap_min_sources")
     if gap_min_sources is None:
         gap_min_sources = settings.gap_min_sources
-    query_variants = repositories.get_setting("query_variants")
-    if query_variants is None:
-        query_variants = settings.query_variants
+    # query_variants is preset-driven (quick=1 so the fast preset stays single-
+    # query; standard/deep/exhaustive=3) with a persisted override still winning.
+    query_variants = _pick("query_variants", settings.query_variants)
 
     keep_threshold = repositories.get_setting("keep_threshold")
     if keep_threshold is None:

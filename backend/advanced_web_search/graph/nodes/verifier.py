@@ -20,15 +20,22 @@ import asyncio
 import math
 import re
 from typing import Any, Optional
+from urllib.parse import urlsplit
 
-from ...config import get_settings
+from ...config import depth_preset, get_settings
 from ...db import repositories
 from ...embeddings import embedder
 from ...llm.provider import chat_json
-from ...utils.http import check_url_alive
+from ...utils.http import check_url_alive, fetch_text
+from ...utils.text import extract_main_text
 from ..events import emit
 
 _MAX_CITATIONS = 30
+# At most this many sources without stored text get a live full-text fetch during
+# verification, so a report full of unverifiable citations can't fan out an
+# unbounded number of network calls in one pass.
+_MAX_FULLTEXT_FETCH = 6
+_FULLTEXT_FETCH_CHARS = 8000
 # Below this claim<->best-passage cosine, the source plainly does not address the
 # claim — mark unsupported without spending an LLM call (the prefilter half of
 # the hybrid). Only applied when a real embedding similarity was available.
@@ -72,6 +79,91 @@ def _claim_grounding(claim_support: dict[Any, list[str]]) -> tuple[dict[str, int
         return {**counts, "graded": 0, "grounded": 0, "share": 0.0}, None
     share = round(grounded / graded, 4)
     return {**counts, "graded": graded, "grounded": grounded, "share": share}, share
+
+
+def _host_of(url: Optional[str]) -> str:
+    if not url:
+        return ""
+    try:
+        return (urlsplit(url).hostname or "").lower().removeprefix("www.")
+    except Exception:
+        return ""
+
+
+async def _quality_scorecard(
+    *,
+    claims: list[dict],
+    ranked_sources: list[dict],
+    grounded_share: Optional[float],
+    report_markdown: str,
+    root_query: str,
+    reranker_degraded: bool,
+) -> dict:
+    """Reference-free, mostly-arithmetic quality scorecard for one run.
+
+    A glanceable self-assessment (NOT a certification) over data the run already
+    has — RAG-triad / RACE-FACT flavored:
+      groundedness        share of claims their cited sources entail (= certainty)
+      citation_precision  kept sources actually cited / kept sources
+      citation_coverage   claims carrying >=1 citation / claims
+      answer_relevance    cosine(report, root question) — one local embed pass
+      source_diversity    unique domains / kept sources (echo-chamber inverse)
+      reranker_degraded   whether the dominant relevance signal collapsed
+      embeddings_degraded answer_relevance couldn't be computed (no embedder);
+                          it is then excluded from `overall`, not counted as 0
+    Never raises; missing inputs degrade a metric to 0.
+    """
+    kept_ids = {s.get("id") for s in ranked_sources if s.get("id") is not None}
+    cited_ids: set = set()
+    claims_with_cites = 0
+    for cl in claims or []:
+        cits = cl.get("citations") or []
+        if cits:
+            claims_with_cites += 1
+        for c in cits:
+            sid = c.get("source_id")
+            if sid is not None:
+                cited_ids.add(sid)
+
+    n_kept = len(kept_ids)
+    n_claims = len(claims or [])
+    precision = round(len(cited_ids & kept_ids) / n_kept, 4) if n_kept else 0.0
+    coverage = round(claims_with_cites / n_claims, 4) if n_claims else 0.0
+
+    hosts = {h for s in ranked_sources if (h := _host_of(s.get("url")))}
+    diversity = round(min(1.0, len(hosts) / n_kept), 4) if n_kept else 0.0
+
+    qv: list[float] = []
+    rv: list[float] = []
+    try:
+        if report_markdown and root_query:
+            qv = await embedder.aembed_query(root_query)
+            rv = await embedder.aembed_query(report_markdown[:4000])
+    except Exception:
+        qv, rv = [], []
+    embeddings_degraded = not (qv and rv)
+    relevance = 0.0 if embeddings_degraded else round(max(0.0, min(1.0, _cosine(qv, rv))), 4)
+
+    groundedness = round(grounded_share, 4) if grounded_share is not None else 0.0
+    # Answer relevance can't be measured without an embedder; EXCLUDE it from the
+    # mean rather than averaging in a false 0 that would unfairly drag `overall`
+    # down on a no-embeddings machine (the UI shows it as N/A instead).
+    metrics = [groundedness, precision, coverage, diversity]
+    if not embeddings_degraded:
+        metrics.append(relevance)
+    overall = round(sum(metrics) / len(metrics), 4)
+    if reranker_degraded:
+        overall = round(overall * 0.9, 4)  # mild penalty: relevance ranking was degraded
+    return {
+        "groundedness": groundedness,
+        "citation_precision": precision,
+        "citation_coverage": coverage,
+        "answer_relevance": relevance,
+        "source_diversity": diversity,
+        "reranker_degraded": bool(reranker_degraded),
+        "embeddings_degraded": bool(embeddings_degraded),
+        "overall": overall,
+    }
 
 
 def _passages(text: str, *, max_passages: int = _MAX_PASSAGES) -> list[str]:
@@ -153,7 +245,7 @@ async def _rank_passage(
     return passages[best_i], float(scores[best_i]) if scores else 0.0, False
 
 
-async def _entail(claim: str, passage: str) -> tuple[str, str]:
+async def _entail(claim: str, passage: str, *, temperature: float = 0.2) -> tuple[str, str]:
     """LLM judgement: does `passage` support `claim`? Returns (verdict, quote)."""
     system = (
         "You judge whether a SOURCE PASSAGE supports a CLAIM. Decide ONLY from "
@@ -172,7 +264,7 @@ async def _entail(claim: str, passage: str) -> tuple[str, str]:
         raw = await chat_json("verifier", [
             {"role": "system", "content": system},
             {"role": "user", "content": user},
-        ])
+        ], temperature=temperature)
     except Exception:
         raw = None
     obj: Any = raw
@@ -190,6 +282,38 @@ async def _entail(claim: str, passage: str) -> tuple[str, str]:
     return verdict, quote
 
 
+async def _entail_consensus(claim: str, passage: str, *, votes: int = 1) -> tuple[str, str]:
+    """Self-consistency entailment: sample `_entail` N times, take the majority.
+
+    A small local judge is noisy on a single sample, and this verdict drives the
+    grounded-share certainty, so for deeper presets we draw several independent
+    samples (at a higher temperature for diversity) and return the most common
+    verdict — with a quote drawn from a sample that produced that verdict.
+    votes <= 1 is exactly today's single low-temperature call.
+    """
+    if votes <= 1:
+        return await _entail(claim, passage)
+    results = await asyncio.gather(
+        *(_entail(claim, passage, temperature=0.6) for _ in range(votes)),
+        return_exceptions=True,
+    )
+    tally: dict[str, int] = {}
+    quote_for: dict[str, str] = {}
+    for r in results:
+        if isinstance(r, BaseException) or not isinstance(r, tuple):
+            continue
+        verdict, quote = r
+        tally[verdict] = tally.get(verdict, 0) + 1
+        if quote and verdict not in quote_for:
+            quote_for[verdict] = quote
+    if not tally:
+        return "partial", ""
+    # Most votes wins; ties broken by supportiveness rank so a tie never silently
+    # downgrades a genuinely-supported claim.
+    best = max(tally, key=lambda v: (tally[v], _SUPPORTIVENESS.get(v, 0)))
+    return best, quote_for.get(best, "")
+
+
 async def _verify_support(
     claim_text: str,
     source: Optional[dict],
@@ -197,6 +321,7 @@ async def _verify_support(
     claim_vec: Optional[list[float]],
     passages: list[str],
     passage_vecs: list[list[float]],
+    votes: int = 1,
 ) -> tuple[Optional[str], Optional[float], Optional[str]]:
     """Entailment verdict for one (claim, source) pair.
 
@@ -216,7 +341,7 @@ async def _verify_support(
     if used_emb and score < _LOW_SIM:
         # Prefilter rejects: clearly off-topic, no LLM needed.
         return "unsupported", support_score, ""
-    verdict, quote = await _entail(claim_text, best_passage)
+    verdict, quote = await _entail_consensus(claim_text, best_passage, votes=votes)
     return verdict, support_score, (quote or best_passage)[:_QUOTE_CHARS]
 
 
@@ -227,6 +352,10 @@ async def verifier(state: dict) -> dict:
     iteration = int(state.get("verifier_iteration", 0))
     settings = get_settings()
     max_iters = int(getattr(settings, "verifier_max_iterations", 2))
+    # Self-consistency: how many independent entailment samples to majority-vote
+    # per (claim, passage). Driven by the depth preset (1 = single-sample).
+    votes = int(depth_preset(state.get("depth")).get("entail_votes", 1) or 1)
+    fetched = 0  # bounded full-text fetch budget for otherwise-unverifiable citations
 
     errors: list[str] = []
     notes: list[dict] = []
@@ -296,6 +425,30 @@ async def verifier(state: dict) -> dict:
                     cached = passage_cache.get(source_id)
                     if cached is None:
                         text = (source or {}).get("full_text") or (source or {}).get("abstract") or ""
+                        # No stored text would force an honest 'unverifiable'. Before
+                        # giving up, try ONE bounded live fetch of the source URL —
+                        # the most common and most fixable entailment gap (web
+                        # sources that stored only a title/abstract). SSRF-guarded by
+                        # fetch_text; persisted so later passes/UI reuse it.
+                        if not text and fetched < _MAX_FULLTEXT_FETCH:
+                            url = (source or {}).get("url")
+                            if url:
+                                fetched += 1
+                                try:
+                                    html = await fetch_text(url)
+                                    body = extract_main_text(html, url) if html else ""
+                                except Exception:
+                                    body = ""
+                                if body and len(body) > 200:
+                                    text = body[:_FULLTEXT_FETCH_CHARS]
+                                    try:
+                                        await asyncio.to_thread(
+                                            repositories.set_source_fulltext, source_id, text
+                                        )
+                                    except Exception:
+                                        pass
+                                    emit("log", run_id, node="verifier",
+                                         message=f"fulltext fetch source {source_id} -> ok ({len(body)} chars)")
                         passages = _passages(text)
                         pvecs: list[list[float]] = []
                         if passages:
@@ -325,6 +478,7 @@ async def verifier(state: dict) -> dict:
                     support, support_score, quote = await _verify_support(
                         claim_text, source,
                         claim_vec=claim_vec, passages=passages, passage_vecs=pvecs,
+                        votes=votes,
                     )
                     if support:
                         emit("log", run_id, node="verifier",
@@ -395,6 +549,29 @@ async def verifier(state: dict) -> dict:
         emit("log", run_id, node="verifier",
              message=f"grounding: {grounding['grounded']}/{grounding['graded']} claims "
                      f"backed by sources ({int(grounded_share * 100)}%)")
+
+    # --- reference-free quality scorecard (persisted onto the report row) ---
+    # A compact, glanceable self-assessment over what the run already produced.
+    # Computed every pass (post-verification, so groundedness is real) and
+    # persisted independently of the grounding block above.
+    try:
+        scorecard = await _quality_scorecard(
+            claims=claims,
+            ranked_sources=list(state.get("ranked_sources") or []),
+            grounded_share=grounded_share,
+            report_markdown=str(state.get("report_markdown") or ""),
+            root_query=str(state.get("root_query") or ""),
+            reranker_degraded=bool(state.get("reranker_degraded")),
+        )
+        await asyncio.to_thread(repositories.update_report_quality, run_id, scorecard)
+        emit("report_quality", run_id, node="verifier", quality=scorecard)
+        emit("log", run_id, node="verifier",
+             message=f"quality: overall {int(scorecard['overall'] * 100)}% "
+                     f"(precision {int(scorecard['citation_precision'] * 100)}%, "
+                     f"coverage {int(scorecard['citation_coverage'] * 100)}%, "
+                     f"relevance {int(scorecard['answer_relevance'] * 100)}%)")
+    except Exception as exc:
+        errors.append(f"verifier: quality scorecard failed: {exc}")
 
     # --- entailment-driven re-research ---
     # A claim whose citations ALL came back 'unsupported' (the source text

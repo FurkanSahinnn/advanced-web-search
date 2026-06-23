@@ -35,6 +35,31 @@ _backend: Optional[str] = None
 _model_id: Optional[str] = None
 _lock = threading.Lock()
 
+# Content-hash cache: the same chunk/query text is embedded repeatedly across a
+# run (the verifier re-embeds source passages every iteration; a re-synthesis
+# re-embeds the same sub-question; identical chunks recur). Embedding is the
+# slowest CPU step, so memoize by (model_id, exact text). Bounded FIFO so a long
+# session can't grow it without limit; a cache miss just embeds as before, so a
+# race only costs a recompute (never a wrong vector).
+_CACHE_MAX = 8192
+_cache: dict[str, list[float]] = {}
+_cache_lock = threading.Lock()
+
+
+def _cache_get(key: str) -> Optional[list[float]]:
+    return _cache.get(key)
+
+
+def _cache_put(key: str, vec: list[float]) -> None:
+    with _cache_lock:
+        if len(_cache) >= _CACHE_MAX:
+            # drop the oldest insertion (dicts preserve insertion order)
+            try:
+                del _cache[next(iter(_cache))]
+            except (StopIteration, KeyError):
+                pass
+        _cache[key] = vec
+
 
 def _candidate_models() -> list[str]:
     """Configured model first, then the fallback chain (deduped, order kept)."""
@@ -97,14 +122,43 @@ def _is_e5() -> bool:
 
 
 def _embed_raw(texts: list[str]) -> list[list[float]]:
+    if not texts:
+        return []
     model, backend = _load()
     if model is None:
         return []
-    if backend == "st":
-        arr = model.encode(texts, normalize_embeddings=True, show_progress_bar=False)
-        return [list(map(float, v)) for v in arr]
-    # fastembed returns a generator of numpy arrays
-    return [list(map(float, v)) for v in model.embed(texts)]
+
+    # Resolve cached vectors first; only embed the misses, then refill the cache.
+    prefix = f"{_model_id or backend}:"
+    out: list[Optional[list[float]]] = [None] * len(texts)
+    miss_idx: list[int] = []
+    miss_txt: list[str] = []
+    for i, t in enumerate(texts):
+        hit = _cache_get(prefix + t)
+        if hit is not None:
+            out[i] = hit
+        else:
+            miss_idx.append(i)
+            miss_txt.append(t)
+
+    if miss_txt:
+        if backend == "st":
+            arr = model.encode(miss_txt, normalize_embeddings=True, show_progress_bar=False)
+            vecs = [list(map(float, v)) for v in arr]
+        else:
+            # fastembed returns a generator of numpy arrays
+            vecs = [list(map(float, v)) for v in model.embed(miss_txt)]
+        for j, vec in zip(miss_idx, vecs):
+            out[j] = vec
+            _cache_put(prefix + texts[j], vec)
+
+    # Contract: return exactly one vector per input, in order. If the backend
+    # short-returned (a still-None slot), signal total failure with [] rather
+    # than a silently shortened, positionally-misaligned list — callers already
+    # treat [] / a length mismatch as "embeddings unavailable" and degrade.
+    if any(v is None for v in out):
+        return []
+    return out  # type: ignore[return-value]
 
 
 def embed_texts(texts: list[str]) -> list[list[float]]:
