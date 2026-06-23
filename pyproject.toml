@@ -43,6 +43,7 @@ dependencies = [
     "psutil>=6.1",         # RAM detection for local-model recommendation
     "python-dateutil>=2.9",
     "orjson>=3.10",
+    "cryptography>=43",    # AES-GCM/PBKDF2 vault for UI-entered API keys
 ]
 
 [project.optional-dependencies]

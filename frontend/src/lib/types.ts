@@ -198,9 +198,12 @@ export interface ProviderStatus {
   available: boolean;
   requires_key: boolean;
   note: string | null;
+  key_set?: boolean;
+  key_source?: string | null; // "vault" | "env"
+  key_hint?: string | null; // last 4 chars when knowable
 }
 
-export type LLMMode = "cloud" | "local" | "none";
+export type LLMMode = "cloud" | "local" | "none" | "custom";
 
 export interface LLMStatus {
   mode: LLMMode;
@@ -226,6 +229,25 @@ export interface DepthPreset {
   recursion_depth: number;
 }
 
+export interface VaultStatus {
+  configured: boolean;
+  unlocked: boolean;
+  providers: string[]; // cloud provider names with a stored key
+}
+
+export type ActiveLLMKind = "auto" | "cloud" | "ollama" | "custom";
+
+export interface ActiveLLM {
+  kind: ActiveLLMKind;
+  provider: string | null;
+}
+
+export interface CustomEndpoint {
+  base_url: string | null;
+  model: string | null;
+  key_set: boolean;
+}
+
 export interface SettingsOut {
   model_map: ModelMap;
   weights: ScoreWeights;
@@ -243,6 +265,12 @@ export interface SettingsOut {
   hardware: HardwareInfo;
   llm: LLMStatus;
   providers: ProviderStatus[];
+  vault: VaultStatus;
+  active_llm: ActiveLLM;
+  custom_endpoint: CustomEndpoint;
+  ollama_base_url: string;
+  local_model: string | null;
+  cloud_defaults: Record<string, string>;
 }
 
 export interface TestLLMResult {
@@ -251,6 +279,27 @@ export interface TestLLMResult {
   model: string | null;
   latency_ms: number;
   sample: string;
+  error: string | null;
+}
+
+// Result of a live credential / endpoint probe (Verify / Test buttons).
+export interface ProbeResult {
+  ok: boolean;
+  latency_ms: number;
+  sample: string;
+  error: string | null;
+}
+
+// Vault mutation result ({ok, error}) — shared by setup/unlock/change/etc.
+export interface VaultResult {
+  ok: boolean;
+  error?: string | null;
+}
+
+export interface SetKeyResult {
+  ok: boolean;
+  stored: boolean;
+  validation: ProbeResult | null;
   error: string | null;
 }
 
@@ -267,6 +316,11 @@ export interface SettingsUpdate {
   gap_min_sources?: number;
   query_variants?: number;
   snowball_top_k?: number;
+  active_llm?: ActiveLLM;
+  ollama_base_url?: string;
+  local_model?: string | null;
+  custom_base_url?: string | null;
+  custom_model?: string | null;
 }
 
 // ----- Request bodies -----

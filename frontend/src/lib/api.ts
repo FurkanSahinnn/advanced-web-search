@@ -6,13 +6,16 @@ import type {
   HealthResponse,
   ProjectCreate,
   ProjectDetail,
+  ProbeResult,
   ProjectOut,
   ReportOut,
   RunOut,
+  SetKeyResult,
   SettingsOut,
   SettingsUpdate,
   SourceOut,
   TestLLMResult,
+  VaultResult,
 } from "./types";
 
 // Same origin in production; Vite proxies "/api" to the backend in dev.
@@ -68,6 +71,51 @@ export const api = {
     request<TestLLMResult>("/api/settings/test-llm", {
       method: "POST",
       json: opts ?? {},
+    }),
+
+  // --- Encrypted API-key vault + provider key management ---
+  vaultSetup: (master_password: string) =>
+    request<VaultResult>("/api/settings/vault/setup", {
+      method: "POST",
+      json: { master_password },
+    }),
+  vaultUnlock: (master_password: string) =>
+    request<VaultResult>("/api/settings/vault/unlock", {
+      method: "POST",
+      json: { master_password },
+    }),
+  vaultLock: () =>
+    request<{ ok: boolean }>("/api/settings/vault/lock", { method: "POST" }),
+  vaultChangePassword: (old_password: string, new_password: string) =>
+    request<VaultResult>("/api/settings/vault/change-password", {
+      method: "POST",
+      json: { old_password, new_password },
+    }),
+  vaultReset: () =>
+    request<{ ok: boolean }>("/api/settings/vault/reset", {
+      method: "POST",
+      json: { confirm: true },
+    }),
+
+  setProviderKey: (provider: string, key: string, verify = true) =>
+    request<SetKeyResult>("/api/settings/provider-key", {
+      method: "PUT",
+      json: { provider, key, verify },
+    }),
+  deleteProviderKey: (provider: string) =>
+    request<VaultResult>(
+      `/api/settings/provider-key/${encodeURIComponent(provider)}`,
+      { method: "DELETE" },
+    ),
+  validateKey: (provider: string, key: string) =>
+    request<ProbeResult>("/api/settings/validate-key", {
+      method: "POST",
+      json: { provider, key },
+    }),
+  testEndpoint: (base_url: string, model: string, api_key?: string) =>
+    request<ProbeResult>("/api/settings/test-endpoint", {
+      method: "POST",
+      json: { base_url, model, ...(api_key ? { api_key } : {}) },
     }),
 
   listProjects: () => request<ProjectOut[]>("/api/projects"),

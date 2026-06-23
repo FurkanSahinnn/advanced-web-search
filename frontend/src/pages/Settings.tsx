@@ -1,22 +1,12 @@
 import { useEffect, useState } from "react";
-import {
-  Cpu,
-  HardDrive,
-  Save,
-  CheckCircle2,
-  Layers,
-  Plug,
-  XCircle,
-} from "lucide-react";
+import { Cpu, HardDrive, Save, CheckCircle2 } from "lucide-react";
 import { api } from "../lib/api";
 import { useLang } from "../lib/i18n";
 import type {
   ModelMap,
   ScoreWeights as Weights,
-  SearchDepth,
   SettingsOut,
   SettingsUpdate,
-  TestLLMResult,
 } from "../lib/types";
 import {
   Card,
@@ -32,7 +22,7 @@ import { Slider } from "../components/ui/slider";
 import { Badge } from "../components/ui/badge";
 import { Spinner } from "../components/ui/spinner";
 import { ScoreWeights } from "../components/ScoreWeights";
-import { cn } from "../lib/cn";
+import { ModelProviders } from "../components/ModelProviders";
 
 const ROLES: (keyof ModelMap)[] = [
   "planner",
@@ -43,7 +33,14 @@ const ROLES: (keyof ModelMap)[] = [
 
 const CUSTOM = "__custom__";
 
-const DEPTHS: SearchDepth[] = ["quick", "standard", "deep", "exhaustive"];
+const CLOUD_LABEL: Record<string, string> = {
+  anthropic: "Anthropic",
+  openai: "OpenAI",
+  gemini: "Gemini",
+  groq: "Groq",
+  deepseek: "DeepSeek",
+  openrouter: "OpenRouter",
+};
 
 export function Settings() {
   const { t } = useLang();
@@ -51,6 +48,7 @@ export function Settings() {
   const [loadError, setLoadError] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   // editable draft
   const [modelMap, setModelMap] = useState<ModelMap>({
@@ -67,102 +65,92 @@ export function Settings() {
     evidence: 0.15,
   });
   const [requireApproval, setRequireApproval] = useState(false);
-  const [useLocalLlm, setUseLocalLlm] = useState(true);
   const [keepThreshold, setKeepThreshold] = useState(0.5);
-  const [maxSubtopics, setMaxSubtopics] = useState(6);
-  const [resultsPerSource, setResultsPerSource] = useState(5);
-  const [depth, setDepth] = useState<SearchDepth>("quick");
-  const [maxResearchRounds, setMaxResearchRounds] = useState(3);
-  const [gapMinSources, setGapMinSources] = useState(3);
-  const [queryVariants, setQueryVariants] = useState(3);
-  const [snowballTopK, setSnowballTopK] = useState(8);
-  // which roles are in free-text mode
+  // which roles are in free-text mode (model id not in the dropdown options)
   const [customRole, setCustomRole] = useState<Record<string, boolean>>({});
-  // LLM connection test
-  const [testing, setTesting] = useState(false);
-  const [testResult, setTestResult] = useState<TestLLMResult | null>(null);
 
-  const runTest = async () => {
-    setTesting(true);
-    setTestResult(null);
+  const applySettings = (s: SettingsOut) => {
+    setSettings(s);
+    setModelMap(s.model_map);
+    setWeights(s.weights);
+    setRequireApproval(s.require_approval);
+    setKeepThreshold(s.keep_threshold);
+  };
+
+  // Re-fetch settings (used by ModelProviders after vault/key/endpoint changes
+  // so the page reflects new status without a full reload).
+  const reload = async () => {
     try {
-      // Test the model the user has TYPED (the draft), not just the saved one,
-      // so the result reflects exactly what's in the fields. Falls back to the
-      // saved/effective model when every field is empty.
-      const draft =
-        modelMap.planner ||
-        modelMap.synthesizer ||
-        modelMap.moderator ||
-        modelMap.verifier ||
-        undefined;
-      setTestResult(await api.testLlm(draft ? { model: draft } : undefined));
-    } catch (e) {
-      setTestResult({
-        ok: false,
-        provider: null,
-        model: null,
-        latency_ms: 0,
-        sample: "",
-        error: e instanceof Error ? e.message : String(e),
-      });
-    } finally {
-      setTesting(false);
+      applySettings(await api.getSettings());
+    } catch {
+      /* keep current view on a transient failure */
     }
   };
 
   useEffect(() => {
     api
       .getSettings()
-      .then((s) => {
-        setSettings(s);
-        setModelMap(s.model_map);
-        setWeights(s.weights);
-        setRequireApproval(s.require_approval);
-        setUseLocalLlm(s.use_local_llm);
-        setKeepThreshold(s.keep_threshold);
-        setMaxSubtopics(s.max_subtopics);
-        setResultsPerSource(s.results_per_source);
-        setDepth((s.depth as SearchDepth) ?? "quick");
-        setMaxResearchRounds(s.max_research_rounds);
-        setGapMinSources(s.gap_min_sources);
-        setQueryVariants(s.query_variants);
-        setSnowballTopK(s.snowball_top_k);
-      })
+      .then(applySettings)
       .catch(() => setLoadError(true));
   }, []);
 
+  // Concrete model-id options for the per-role dropdowns (no bare provider
+  // names — those aren't valid litellm ids). Deliberately excludes the editable
+  // `modelMap` draft so a value the user is typing in a custom-role text box
+  // doesn't get added to the options and flip the row out of free-text mode.
   const modelOptions = (() => {
-    if (!settings) return [];
+    if (!settings) return [] as string[];
     const opts = new Set<string>();
-    settings.llm.cloud_providers.forEach((p) => opts.add(p));
     settings.llm.ollama_models.forEach((m) => opts.add(m));
-    Object.values(settings.model_map).forEach((m) => m && opts.add(m));
     Object.values(settings.llm.effective_models).forEach((m) => m && opts.add(m));
     return [...opts];
   })();
 
+  // Per-role backend picker options: each entry is a concrete, CORRECTLY-PREFIXED
+  // litellm id (cloud provider default / ollama_chat tag / custom endpoint) so the
+  // user can decide, per agent role, exactly which backend handles it.
+  const roleOptions = (() => {
+    if (!settings) return [] as { value: string; label: string }[];
+    const out: { value: string; label: string }[] = [];
+    settings.providers
+      .filter((p) => p.kind === "cloud" && p.available)
+      .forEach((p) => {
+        const id = settings.cloud_defaults[p.name];
+        if (id) {
+          out.push({
+            value: id,
+            label: `${t("settings.backendCloud")} · ${CLOUD_LABEL[p.name] ?? p.name} (${id})`,
+          });
+        }
+      });
+    settings.llm.ollama_models.forEach((m) =>
+      out.push({ value: `ollama_chat/${m}`, label: `${t("settings.backendOllama")} · ${m}` }),
+    );
+    const cm = settings.custom_endpoint.model;
+    if (cm) {
+      out.push({ value: `custom/${cm}`, label: `${t("settings.backendCustom")} · ${cm}` });
+    }
+    return out;
+  })();
+  const roleOptionValues = new Set(roleOptions.map((o) => o.value));
+
   const save = async () => {
     setSaving(true);
     setSaved(false);
+    setSaveError(null);
     const body: SettingsUpdate = {
       model_map: modelMap,
       weights,
       require_approval: requireApproval,
-      use_local_llm: useLocalLlm,
       keep_threshold: keepThreshold,
-      max_subtopics: maxSubtopics,
-      results_per_source: resultsPerSource,
-      depth,
-      max_research_rounds: maxResearchRounds,
-      gap_min_sources: gapMinSources,
-      query_variants: queryVariants,
-      snowball_top_k: snowballTopK,
     };
     try {
       const updated = await api.patchSettings(body);
       setSettings(updated);
       setSaved(true);
       setTimeout(() => setSaved(false), 2500);
+    } catch (e) {
+      setSaveError(e instanceof Error ? e.message : t("common.error"));
     } finally {
       setSaving(false);
     }
@@ -185,7 +173,6 @@ export function Settings() {
   }
 
   const hw = settings.hardware;
-  const preset = settings.depth_presets?.[depth] ?? null;
 
   return (
     <div className="mx-auto max-w-4xl px-4 py-8">
@@ -209,27 +196,32 @@ export function Settings() {
         </Button>
       </div>
 
+      {saveError && (
+        <div className="mb-4 rounded-[var(--radius)] border border-[color-mix(in_srgb,var(--color-danger)_40%,transparent)] bg-[color-mix(in_srgb,var(--color-danger)_12%,transparent)] px-3 py-2 text-xs text-[var(--color-danger)]">
+          {t("common.error")}: {saveError}
+        </div>
+      )}
+
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-        {/* Model assignments */}
+        {/* AI models & providers: encrypted vault, cloud keys + verify,
+            local Ollama, self-hosted OpenAI-compatible server. */}
+        <ModelProviders settings={settings} t={t} onChanged={reload} />
+
+        {/* Per-role model assignment (saved with the main Save button). */}
         <Card className="md:col-span-2">
           <CardHeader>
-            <CardTitle>{t("settings.models")}</CardTitle>
-            <CardDescription>{t("settings.modelsHint")}</CardDescription>
+            <CardTitle>{t("settings.roles")}</CardTitle>
+            <CardDescription>{t("settings.rolesHint")}</CardDescription>
           </CardHeader>
           <CardContent className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            {/* Free-text model id per agent. Type any litellm id (incl.
-               openrouter/<slug>); the datalist only offers optional suggestions. */}
             <datalist id="model-suggestions">
               {Array.from(
                 new Set([
                   ...modelOptions,
                   "openrouter/anthropic/claude-haiku-4.5",
-                  "openrouter/anthropic/claude-sonnet-4.5",
                   "openrouter/openai/gpt-4o-mini",
                   "openrouter/google/gemini-2.5-flash",
                   "openrouter/deepseek/deepseek-chat",
-                  "openrouter/meta-llama/llama-3.3-70b-instruct",
-                  "openrouter/qwen/qwen-2.5-72b-instruct",
                 ]),
               ).map((o) => (
                 <option key={o} value={o} />
@@ -237,177 +229,50 @@ export function Settings() {
             </datalist>
             {ROLES.map((role) => {
               const current = modelMap[role] ?? "";
+              const isCustom =
+                customRole[role] || (!!current && !roleOptionValues.has(current));
               return (
                 <div key={role}>
                   <label className="mb-1 block text-xs font-medium text-[var(--color-muted)]">
                     {t(`settings.role.${role}`)}
                   </label>
-                  <Input
-                    list="model-suggestions"
-                    value={current}
-                    placeholder="örn. openrouter/anthropic/claude-3.5-sonnet"
-                    spellCheck={false}
-                    autoCapitalize="off"
-                    autoCorrect="off"
-                    onChange={(e) =>
-                      setModelMap((m) => ({ ...m, [role]: e.target.value || null }))
-                    }
-                  />
+                  <Select
+                    value={isCustom ? CUSTOM : current}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      if (v === CUSTOM) {
+                        setCustomRole((c) => ({ ...c, [role]: true }));
+                      } else {
+                        setCustomRole((c) => ({ ...c, [role]: false }));
+                        setModelMap((m) => ({ ...m, [role]: v || null }));
+                      }
+                    }}
+                  >
+                    <option value="">{t("settings.role.default")}</option>
+                    {roleOptions.map((o) => (
+                      <option key={o.value} value={o.value}>
+                        {o.label}
+                      </option>
+                    ))}
+                    <option value={CUSTOM}>{t("settings.custom")}</option>
+                  </Select>
+                  {isCustom && (
+                    <Input
+                      className="mt-1.5"
+                      list="model-suggestions"
+                      value={current}
+                      placeholder="örn. openrouter/anthropic/claude-3.5-sonnet"
+                      spellCheck={false}
+                      autoCapitalize="off"
+                      autoCorrect="off"
+                      onChange={(e) =>
+                        setModelMap((m) => ({ ...m, [role]: e.target.value || null }))
+                      }
+                    />
+                  )}
                 </div>
               );
             })}
-
-            {/* Connection test */}
-            <div className="sm:col-span-2">
-              <div className="flex flex-wrap items-center gap-2">
-                <Button
-                  type="button"
-                  variant="secondary"
-                  size="sm"
-                  onClick={runTest}
-                  disabled={testing}
-                >
-                  {testing ? (
-                    <Spinner size={14} className="text-current" />
-                  ) : (
-                    <Plug size={14} />
-                  )}
-                  {testing
-                    ? t("settings.testing")
-                    : t("settings.testConnection")}
-                </Button>
-
-                {testResult && !testing && (
-                  <span
-                    className={cn(
-                      "inline-flex items-center gap-1.5 text-xs",
-                      testResult.ok
-                        ? "text-[var(--color-good)]"
-                        : "text-[var(--color-danger)]",
-                    )}
-                  >
-                    {testResult.ok ? (
-                      <CheckCircle2 size={14} />
-                    ) : (
-                      <XCircle size={14} />
-                    )}
-                    {testResult.ok ? (
-                      <span>
-                        {t("settings.testOk")} · {testResult.latency_ms}ms
-                        {testResult.model ? ` · ${testResult.model}` : ""}
-                      </span>
-                    ) : (
-                      <span className="break-words">
-                        {t("settings.testFailed")}
-                        {testResult.error ? `: ${testResult.error}` : ""}
-                      </span>
-                    )}
-                  </span>
-                )}
-              </div>
-            </div>
-
-            {/* Local LLM (Ollama) toggle. When OFF, the backend never probes
-               Ollama (no ~1s Settings delay) and never falls back to a local
-               model — only cloud keys are used. */}
-            <div className="sm:col-span-2 border-t border-[var(--color-border)] pt-3">
-              <label className="flex cursor-pointer items-center justify-between text-sm text-[var(--color-fg)]">
-                {t("settings.useLocalLlm")}
-                <input
-                  type="checkbox"
-                  checked={useLocalLlm}
-                  onChange={(e) => setUseLocalLlm(e.target.checked)}
-                  className="h-4 w-4 accent-[var(--color-accent)]"
-                />
-              </label>
-              {!useLocalLlm && (
-                <p className="mt-1 text-[11px] leading-snug text-[var(--color-muted)]">
-                  {t("settings.useLocalLlmHint")}
-                </p>
-              )}
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Search depth / Comprehensiveness */}
-        <Card className="md:col-span-2">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Layers size={15} /> {t("settings.comprehensiveness")}
-            </CardTitle>
-            <CardDescription>
-              {t("settings.comprehensivenessHint")}
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div>
-              <label className="mb-1.5 block text-xs font-medium text-[var(--color-muted)]">
-                {t("settings.depth")}
-              </label>
-              <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-4">
-                {DEPTHS.map((d) => (
-                  <button
-                    key={d}
-                    type="button"
-                    onClick={() => setDepth(d)}
-                    aria-pressed={depth === d}
-                    className={cn(
-                      "rounded-[var(--radius)] border px-2.5 py-1.5 text-xs font-medium transition-colors",
-                      depth === d
-                        ? "border-[var(--color-accent)] bg-[var(--color-accent-soft)] text-[var(--color-accent)]"
-                        : "border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-muted)] hover:border-[var(--color-border-strong)] hover:text-[var(--color-fg)]",
-                    )}
-                  >
-                    {t(`depth.${d}`)}
-                  </button>
-                ))}
-              </div>
-              <p className="mt-1.5 text-[11px] leading-snug text-[var(--color-muted)]">
-                {t(`depth.${depth}.desc`)}
-              </p>
-              {preset && (
-                <p className="mt-1.5 text-[10px] leading-snug text-[var(--color-faint)]">
-                  {t("settings.presetImplies")}: {preset.max_subtopics}{" "}
-                  {t("settings.preset.subtopics")} · {preset.max_research_rounds}{" "}
-                  {t("settings.preset.rounds")} ·{" "}
-                  {t("settings.preset.snowball")} {preset.snowball ? "✓" : "✗"} (
-                  {preset.snowball_top_k}) · {t("settings.preset.bilingual")}{" "}
-                  {preset.bilingual ? "✓" : "✗"} ·{" "}
-                  {t("settings.preset.recursion")} {preset.recursion_depth}
-                </p>
-              )}
-            </div>
-
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <NumberField
-                label={t("settings.maxResearchRounds")}
-                value={maxResearchRounds}
-                min={1}
-                max={5}
-                onChange={setMaxResearchRounds}
-              />
-              <NumberField
-                label={t("settings.gapMinSources")}
-                value={gapMinSources}
-                min={1}
-                max={8}
-                onChange={setGapMinSources}
-              />
-              <NumberField
-                label={t("settings.queryVariants")}
-                value={queryVariants}
-                min={1}
-                max={5}
-                onChange={setQueryVariants}
-              />
-              <NumberField
-                label={t("settings.snowballTopK")}
-                value={snowballTopK}
-                min={0}
-                max={30}
-                onChange={setSnowballTopK}
-              />
-            </div>
           </CardContent>
         </Card>
 
@@ -455,36 +320,6 @@ export function Settings() {
               />
             </div>
 
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="mb-1 block text-xs text-[var(--color-muted)]">
-                  {t("settings.maxSubtopics")}
-                </label>
-                <Input
-                  type="number"
-                  min={1}
-                  max={50}
-                  value={maxSubtopics}
-                  onChange={(e) =>
-                    setMaxSubtopics(parseInt(e.target.value) || 1)
-                  }
-                />
-              </div>
-              <div>
-                <label className="mb-1 block text-xs text-[var(--color-muted)]">
-                  {t("settings.resultsPerSource")}
-                </label>
-                <Input
-                  type="number"
-                  min={1}
-                  max={50}
-                  value={resultsPerSource}
-                  onChange={(e) =>
-                    setResultsPerSource(parseInt(e.target.value) || 1)
-                  }
-                />
-              </div>
-            </div>
           </CardContent>
         </Card>
 
@@ -547,7 +382,11 @@ export function Settings() {
           </CardHeader>
           <CardContent>
             <ul className="space-y-1.5">
-              {settings.providers.map((p) => (
+              {/* Cloud LLM providers are managed in the section above; here we
+                 list only the web/academic sources + local Ollama status. */}
+              {settings.providers
+                .filter((p) => p.kind !== "cloud")
+                .map((p) => (
                 <li
                   key={`${p.kind}-${p.name}`}
                   className="flex items-center justify-between rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2.5 py-1.5"
@@ -577,39 +416,6 @@ export function Settings() {
           </CardContent>
         </Card>
       </div>
-    </div>
-  );
-}
-
-function NumberField({
-  label,
-  value,
-  min,
-  max,
-  onChange,
-}: {
-  label: string;
-  value: number;
-  min: number;
-  max: number;
-  onChange: (v: number) => void;
-}) {
-  return (
-    <div>
-      <div className="mb-1 flex items-center justify-between text-xs">
-        <span className="text-[var(--color-muted)]">{label}</span>
-        <span className="tabular-nums text-[var(--color-accent)]">{value}</span>
-      </div>
-      <Slider
-        min={min}
-        max={max}
-        step={1}
-        value={value}
-        onChange={(e) => {
-          const v = parseInt(e.target.value, 10);
-          onChange(Number.isNaN(v) ? min : v);
-        }}
-      />
     </div>
   );
 }

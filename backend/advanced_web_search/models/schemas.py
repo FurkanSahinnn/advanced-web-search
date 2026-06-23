@@ -268,15 +268,40 @@ class ProviderStatus(BaseModel):
     available: bool
     requires_key: bool = False
     note: Optional[str] = None
+    # Credential status for cloud providers (non-secret): whether a key is
+    # stored, where it came from, and a last-4 hint when knowable.
+    key_set: bool = False
+    key_source: Optional[str] = None  # "vault" | "env"
+    key_hint: Optional[str] = None
 
 
 class LLMStatus(BaseModel):
-    mode: Literal["cloud", "local", "none"]
+    mode: Literal["cloud", "local", "none", "custom"]
     active_provider: Optional[str] = None
     effective_models: ModelMap
     cloud_providers: list[str] = Field(default_factory=list)
     ollama_available: bool = False
     ollama_models: list[str] = Field(default_factory=list)
+
+
+class VaultStatus(BaseModel):
+    """Non-secret status of the encrypted API-key vault."""
+    configured: bool = False  # a master password has been set
+    unlocked: bool = False    # the derived key is loaded in memory this process
+    providers: list[str] = Field(default_factory=list)  # cloud names with a stored key
+
+
+class ActiveLLM(BaseModel):
+    """Which LLM backend the user pinned (``auto`` = cloud-if-key-else-local)."""
+    kind: Literal["auto", "cloud", "ollama", "custom"] = "auto"
+    provider: Optional[str] = None  # cloud provider name when kind == "cloud"
+
+
+class CustomEndpoint(BaseModel):
+    """A self-hosted OpenAI-compatible endpoint (LM Studio / vLLM / llama.cpp …)."""
+    base_url: Optional[str] = None
+    model: Optional[str] = None
+    key_set: bool = False  # whether an (encrypted) endpoint key is stored
 
 
 class SettingsOut(BaseModel):
@@ -296,6 +321,15 @@ class SettingsOut(BaseModel):
     hardware: HardwareInfo
     llm: LLMStatus
     providers: list[ProviderStatus] = Field(default_factory=list)
+    # LLM provider/endpoint configuration (UI-editable; keys via the vault).
+    vault: VaultStatus = Field(default_factory=VaultStatus)
+    active_llm: ActiveLLM = Field(default_factory=ActiveLLM)
+    custom_endpoint: CustomEndpoint = Field(default_factory=CustomEndpoint)
+    ollama_base_url: str = "http://localhost:11434"
+    local_model: Optional[str] = None
+    # provider -> default litellm model id, so the per-role picker can offer a
+    # correctly-prefixed cloud option without duplicating CLOUD_DEFAULTS.
+    cloud_defaults: dict[str, str] = Field(default_factory=dict)
 
 
 class SettingsUpdate(BaseModel):
@@ -311,6 +345,12 @@ class SettingsUpdate(BaseModel):
     gap_min_sources: Optional[int] = None
     query_variants: Optional[int] = None
     snowball_top_k: Optional[int] = None
+    # LLM provider/endpoint config (non-secret; API keys go via /vault routes).
+    active_llm: Optional[ActiveLLM] = None
+    ollama_base_url: Optional[str] = None
+    local_model: Optional[str] = None
+    custom_base_url: Optional[str] = None
+    custom_model: Optional[str] = None
 
 
 # --------------------------------------------------------------------------- #

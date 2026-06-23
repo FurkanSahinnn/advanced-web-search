@@ -483,3 +483,9 @@ def set_setting(key: str, value: Any) -> None:
                ON CONFLICT(key) DO UPDATE SET value=excluded.value""",
             (key, json.dumps(value, ensure_ascii=False)),
         )
+
+
+def delete_setting(key: str) -> None:
+    """Remove a setting row entirely (used to truly wipe vault rows on reset)."""
+    with tx() as c:
+        c.execute("DELETE FROM app_settings WHERE key=?", (key,))

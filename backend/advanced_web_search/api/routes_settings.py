@@ -12,15 +12,19 @@ from pydantic import BaseModel
 from ..config import CLOUD_DEFAULTS, DEFAULT_SCORE_WEIGHTS, DEPTH_PRESETS, get_settings
 from ..db import repositories
 from ..llm import provider as llm_provider
+from ..llm import vault
 from ..llm.hardware import hardware_info
 from ..llm.provider import effective_model_map, llm_status
 from ..models.schemas import (
+    ActiveLLM,
+    CustomEndpoint,
     LLMStatus,
     ModelMap,
     ProviderStatus,
     ScoreWeights,
     SettingsOut,
     SettingsUpdate,
+    VaultStatus,
 )
 from ..sources.registry import all_providers
 
@@ -94,7 +98,6 @@ async def test_llm_endpoint(body: Optional[TestLLMBody] = None) -> dict:
 
 def _build_providers(llm: LLMStatus) -> list[ProviderStatus]:
     """Compose the provider-status list (sources + cloud LLM providers + ollama)."""
-    settings = get_settings()
     out: list[ProviderStatus] = []
 
     # Source providers (web / academic).
@@ -112,15 +115,19 @@ def _build_providers(llm: LLMStatus) -> list[ProviderStatus]:
             )
         )
 
-    # Cloud LLM providers.
-    available_cloud = set(settings.available_cloud_providers)
+    # Cloud LLM providers — availability + (non-secret) key status from the vault.
+    available_cloud = set(vault.available_cloud_providers())
     for name in CLOUD_DEFAULTS:
+        ks = vault.key_status(name)
         out.append(
             ProviderStatus(
                 name=name,
                 kind="cloud",
                 available=name in available_cloud,
                 requires_key=True,
+                key_set=ks["key_set"],
+                key_source=ks["key_source"],
+                key_hint=ks["key_hint"],
             )
         )
 
@@ -135,6 +142,22 @@ def _build_providers(llm: LLMStatus) -> list[ProviderStatus]:
         )
     )
     return out
+
+
+def _runtime_cfg() -> dict:
+    """Read all vault + LLM-routing overrides in one worker thread (DB reads)."""
+    return {
+        "vault": {
+            "configured": vault.is_configured(),
+            "unlocked": vault.is_unlocked(),
+            "providers": vault.cloud_providers_with_keys(),
+        },
+        "active_llm": vault.current_active_llm(),
+        "custom_endpoint": vault.current_custom_endpoint(),
+        "custom_key_set": vault.has_custom_key(),
+        "ollama_base_url": vault.current_ollama_base_url(),
+        "local_model": vault.current_local_model(),
+    }
 
 
 async def _settings_payload() -> SettingsOut:
@@ -210,8 +233,12 @@ async def _settings_payload() -> SettingsOut:
 
     hw = await asyncio.to_thread(hardware_info)
     llm = await llm_status()
-    providers = _build_providers(llm)
+    # _build_providers does synchronous DB-backed vault reads (key_status); keep
+    # them off the event loop like the rest of the payload assembly.
+    providers = await asyncio.to_thread(_build_providers, llm)
+    cfg = await asyncio.to_thread(_runtime_cfg)
 
+    ce = cfg["custom_endpoint"]
     return SettingsOut(
         model_map=model_map,
         weights=weights,
@@ -229,6 +256,19 @@ async def _settings_payload() -> SettingsOut:
         hardware=hw,
         llm=llm,
         providers=providers,
+        vault=VaultStatus(**cfg["vault"]),
+        active_llm=ActiveLLM(
+            kind=cfg["active_llm"].get("kind", "auto"),
+            provider=cfg["active_llm"].get("provider"),
+        ),
+        custom_endpoint=CustomEndpoint(
+            base_url=ce.get("base_url") or None,
+            model=ce.get("model") or None,
+            key_set=cfg["custom_key_set"],
+        ),
+        ollama_base_url=cfg["ollama_base_url"],
+        local_model=cfg["local_model"],
+        cloud_defaults=dict(CLOUD_DEFAULTS),
     )
 
 
@@ -267,4 +307,152 @@ async def update_settings_endpoint(body: SettingsUpdate) -> SettingsOut:
     if body.snowball_top_k is not None:
         await _set("snowball_top_k", int(body.snowball_top_k))
 
+    # LLM provider/endpoint config (non-secret). API keys never travel here —
+    # they go through the dedicated /settings/provider-key vault route.
+    if body.active_llm is not None:
+        await asyncio.to_thread(
+            vault.set_active_llm, body.active_llm.kind, body.active_llm.provider
+        )
+    if body.ollama_base_url is not None:
+        await asyncio.to_thread(vault.set_ollama_base_url, body.ollama_base_url)
+    if body.local_model is not None:
+        await asyncio.to_thread(vault.set_local_model, body.local_model)
+    if body.custom_base_url is not None or body.custom_model is not None:
+        cur = await asyncio.to_thread(vault.current_custom_endpoint)
+        await asyncio.to_thread(
+            vault.set_custom_endpoint,
+            body.custom_base_url if body.custom_base_url is not None else cur.get("base_url"),
+            body.custom_model if body.custom_model is not None else cur.get("model"),
+        )
+
     return await _settings_payload()
+
+
+# --------------------------------------------------------------------------- #
+# Encrypted API-key vault + per-provider key management + live validation
+# --------------------------------------------------------------------------- #
+
+class VaultSetupBody(BaseModel):
+    master_password: str
+
+
+class VaultUnlockBody(BaseModel):
+    master_password: str
+
+
+class VaultChangeBody(BaseModel):
+    old_password: str
+    new_password: str
+
+
+class VaultResetBody(BaseModel):
+    # An explicit confirmation is required so a blind cross-site POST (which
+    # can't read our response but could still trigger the side effect) can't
+    # silently wipe the vault. The forgot-password flow stays password-free.
+    confirm: bool = False
+
+
+# Only these names may be used as vault secret keys (cloud providers + custom).
+_ALLOWED_KEY_NAMES = set(vault.CLOUD_ENV) | {"custom"}
+
+
+class ProviderKeyBody(BaseModel):
+    provider: str          # cloud name (anthropic…openrouter) or "custom"
+    key: str
+    verify: bool = True     # live-validate cloud keys before storing
+
+
+class ValidateKeyBody(BaseModel):
+    provider: str
+    key: str
+
+
+class TestEndpointBody(BaseModel):
+    base_url: str
+    model: str
+    api_key: Optional[str] = None
+
+
+@router.get("/settings/vault")
+async def vault_status_endpoint() -> dict:
+    return (await asyncio.to_thread(_runtime_cfg))["vault"]
+
+
+@router.post("/settings/vault/setup")
+async def vault_setup_endpoint(body: VaultSetupBody) -> dict:
+    """Set the master password the first time (auto-unlocks on success)."""
+    return await asyncio.to_thread(vault.setup, body.master_password)
+
+
+@router.post("/settings/vault/unlock")
+async def vault_unlock_endpoint(body: VaultUnlockBody) -> dict:
+    return await asyncio.to_thread(vault.unlock, body.master_password)
+
+
+@router.post("/settings/vault/lock")
+async def vault_lock_endpoint() -> dict:
+    await asyncio.to_thread(vault.lock)
+    return {"ok": True}
+
+
+@router.post("/settings/vault/change-password")
+async def vault_change_endpoint(body: VaultChangeBody) -> dict:
+    return await asyncio.to_thread(vault.change_password, body.old_password, body.new_password)
+
+
+@router.post("/settings/vault/reset")
+async def vault_reset_endpoint(body: VaultResetBody) -> dict:
+    """Forgot-password escape hatch: wipe the vault and all stored keys."""
+    if not body.confirm:
+        return {"ok": False, "error": "confirmation required"}
+    await asyncio.to_thread(vault.reset)
+    return {"ok": True}
+
+
+@router.put("/settings/provider-key")
+async def set_provider_key_endpoint(body: ProviderKeyBody) -> dict:
+    """Validate (optionally) then encrypt-and-store a provider/custom key.
+
+    Requires an unlocked vault. For cloud providers, a failed live validation
+    aborts the store so a known-bad key is never persisted.
+    """
+    provider = (body.provider or "").strip()
+    key = (body.key or "").strip()
+    if provider not in _ALLOWED_KEY_NAMES:
+        return {"ok": False, "stored": False, "validation": None, "error": "unknown provider"}
+    validation = None
+    if body.verify and provider != "custom":
+        validation = await llm_provider.validate_key(provider, key)
+        if not validation.get("ok"):
+            return {
+                "ok": False,
+                "stored": False,
+                "validation": validation,
+                "error": validation.get("error"),
+            }
+    res = await asyncio.to_thread(vault.set_key, provider, key)
+    return {
+        "ok": bool(res.get("ok")),
+        "stored": bool(res.get("ok")),
+        "validation": validation,
+        "error": res.get("error"),
+    }
+
+
+@router.delete("/settings/provider-key/{provider}")
+async def delete_provider_key_endpoint(provider: str) -> dict:
+    if provider not in _ALLOWED_KEY_NAMES:
+        return {"ok": False, "error": "unknown provider"}
+    return await asyncio.to_thread(vault.delete_key, provider)
+
+
+@router.post("/settings/validate-key")
+async def validate_key_endpoint(body: ValidateKeyBody) -> dict:
+    """Live-test a candidate cloud key WITHOUT storing it (the Verify button)."""
+    return await llm_provider.validate_key((body.provider or "").strip(), (body.key or "").strip())
+
+
+@router.post("/settings/test-endpoint")
+async def test_endpoint_endpoint(body: TestEndpointBody) -> dict:
+    """Live-test a self-hosted OpenAI-compatible endpoint WITHOUT storing it."""
+    return await llm_provider.test_endpoint(body.base_url, body.model, body.api_key)

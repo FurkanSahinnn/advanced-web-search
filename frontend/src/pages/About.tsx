@@ -167,7 +167,7 @@ const architecture = (lang: Lang) =>
   subgraph BE["Backend — Python · FastAPI"]
     API["REST + SSE"]
     LG["LangGraph + SQLite checkpoint"]
-    LLM["LiteLLM (bulut veya yerel Ollama)"]
+    LLM["LiteLLM (bulut · yerel Ollama · kendi sunucun) — şifreli anahtar kasası"]
     EMB["fastembed: bge-m3 + reranker"]
     SRC["13 kaynak sağlayıcı"]
   end
@@ -189,7 +189,7 @@ const architecture = (lang: Lang) =>
   subgraph BE["Backend — Python · FastAPI"]
     API["REST + SSE"]
     LG["LangGraph + SQLite checkpoint"]
-    LLM["LiteLLM (cloud or local Ollama)"]
+    LLM["LiteLLM (cloud · local Ollama · your own server) — encrypted key vault"]
     EMB["fastembed: bge-m3 + reranker"]
     SRC["13 source providers"]
   end

@@ -24,6 +24,7 @@ from typing import Any, AsyncIterator, Optional
 
 from ..config import AGENT_ROLES, CLOUD_DEFAULTS, get_settings
 from ..models.schemas import LLMStatus, ModelMap
+from . import vault
 from .hardware import recommend_local_model
 
 
@@ -51,29 +52,60 @@ def local_llm_enabled() -> bool:
 
 
 def _local_model_id() -> str:
-    settings = get_settings()
-    name = settings.local_model or recommend_local_model()
+    name = vault.current_local_model() or recommend_local_model()
     return f"ollama_chat/{name}"
 
 
+def _custom_model_id() -> str | None:
+    """The internal model id for a configured self-hosted endpoint, else None.
+
+    Encoded as ``custom/<model>`` (NOT ``openai/<model>``) so ``_prepare`` can
+    unambiguously route it to the user's ``api_base`` without colliding with a
+    real OpenAI key. Returns None when the endpoint isn't fully configured.
+    """
+    ep = vault.current_custom_endpoint()
+    if ep.get("base_url") and ep.get("model"):
+        return f"custom/{ep['model']}"
+    return None
+
+
 def _default_model() -> str:
-    settings = get_settings()
-    providers = settings.available_cloud_providers
-    if providers:
+    """Pick the base model for every role from the user's active selection.
+
+    ``active_llm.kind`` lets the UI pin cloud/ollama/custom explicitly; a
+    misconfigured pin falls through to ``auto`` (cloud-if-key-else-local) so a
+    run never hard-stops on a half-finished setting.
+    """
+    active = vault.current_active_llm()
+    kind = active.get("kind", "auto")
+    if kind == "ollama":
+        return _local_model_id()
+    if kind == "custom":
+        custom = _custom_model_id()
+        if custom:
+            return custom
+    if kind == "cloud":
+        prov = active.get("provider")
+        if prov and prov in CLOUD_DEFAULTS and vault.effective_cloud_key(prov):
+            return CLOUD_DEFAULTS[prov]
+    providers = vault.available_cloud_providers()
+    if providers and providers[0] in CLOUD_DEFAULTS:
         return CLOUD_DEFAULTS[providers[0]]
+    # Auto-fallback also honours a configured self-hosted endpoint before going
+    # local, so this matches llm_status()'s mode ordering exactly.
+    custom = _custom_model_id()
+    if custom:
+        return custom
     return _local_model_id()
 
 
 def _persisted_overrides() -> dict[str, str]:
     """Read role->model overrides saved by the settings API (best-effort)."""
     try:
-        from ..db.database import get_conn
+        from ..db import repositories
 
-        row = get_conn().execute(
-            "SELECT value FROM app_settings WHERE key='model_map'"
-        ).fetchone()
-        if row:
-            data = json.loads(row["value"])
+        data = repositories.get_setting("model_map")
+        if isinstance(data, dict):
             return {k: v for k, v in data.items() if v}
     except Exception:
         pass
@@ -97,11 +129,38 @@ def _is_ollama(model: str) -> bool:
     return model.startswith("ollama")
 
 
-def _call_kwargs(model: str) -> dict[str, Any]:
+def _provider_of(model: str) -> str | None:
+    """The cloud provider name a litellm model id belongs to, else None."""
+    head = model.split("/", 1)[0]
+    return head if head in vault.CLOUD_ENV else None
+
+
+def _prepare(model: str) -> tuple[str, dict[str, Any]]:
+    """Resolve an internal model id to the real litellm id + per-call kwargs.
+
+    Threads the right endpoint/credential WITHOUT mutating the process
+    environment (so ``get_settings()``'s lru_cache and litellm's own env reads
+    stay clean):
+      * ``custom/<model>``  -> ``openai/<model>`` + self-hosted api_base/api_key
+      * ``ollama*``         -> the (DB-overridable) Ollama api_base
+      * cloud ids           -> explicit api_key from the vault when one is stored
+        (else left to litellm's own environment-key resolution)
+    """
     kwargs: dict[str, Any] = {}
+    if model.startswith("custom/"):
+        ep = vault.current_custom_endpoint()
+        kwargs["api_base"] = ep.get("base_url") or ""
+        kwargs["api_key"] = vault.effective_custom_key() or "sk-noauth"
+        return "openai/" + model[len("custom/"):], kwargs
     if _is_ollama(model):
-        kwargs["api_base"] = get_settings().ollama_base_url
-    return kwargs
+        kwargs["api_base"] = vault.current_ollama_base_url()
+        return model, kwargs
+    prov = _provider_of(model)
+    if prov:
+        key = vault.effective_cloud_key(prov)
+        if key:
+            kwargs["api_key"] = key
+    return model, kwargs
 
 
 # --------------------------------------------------------------------------- #
@@ -113,7 +172,8 @@ async def _acompletion(model: str, messages: list[dict], **kw: Any):
 
     litellm.drop_params = True  # silently drop unsupported params per provider
     litellm.suppress_debug_info = True
-    return await litellm.acompletion(model=model, messages=messages, **_call_kwargs(model), **kw)
+    real_model, extra = _prepare(model)
+    return await litellm.acompletion(model=real_model, messages=messages, **extra, **kw)
 
 
 async def chat(
@@ -249,7 +309,7 @@ async def ollama_models() -> list[str]:
     if now - _OLLAMA_PROBE["t"] < _OLLAMA_TTL:
         return list(_OLLAMA_PROBE["models"])
 
-    base = get_settings().ollama_base_url.rstrip("/")
+    base = vault.current_ollama_base_url().rstrip("/")
     models: list[str] = []
     try:
         client = await get_client()
@@ -266,19 +326,31 @@ async def ollama_models() -> list[str]:
 
 
 async def llm_status() -> LLMStatus:
-    settings = get_settings()
-    providers = settings.available_cloud_providers
+    providers = vault.available_cloud_providers()
     models = await ollama_models()
     emap = effective_model_map()
-    if providers:
-        mode = "cloud"
-        active = providers[0]
+    active_cfg = vault.current_active_llm()
+    kind = active_cfg.get("kind", "auto")
+    custom = vault.current_custom_endpoint()
+    custom_ready = bool(custom.get("base_url") and custom.get("model"))
+
+    # Honour an explicit pin when it's actually usable, else fall through the
+    # same auto order _default_model uses (cloud -> custom -> ollama -> none).
+    mode = "none"
+    active: str | None = None
+    if kind == "custom" and custom_ready:
+        mode, active = "custom", "custom"
+    elif kind == "ollama" and models:
+        mode, active = "local", "ollama"
+    elif kind == "cloud" and active_cfg.get("provider") in providers:
+        mode, active = "cloud", active_cfg.get("provider")
+    elif providers:
+        mode, active = "cloud", providers[0]
+    elif custom_ready:
+        mode, active = "custom", "custom"
     elif models:
-        mode = "local"
-        active = "ollama"
-    else:
-        mode = "none"
-        active = None
+        mode, active = "local", "ollama"
+
     return LLMStatus(
         mode=mode,
         active_provider=active,
@@ -287,3 +359,75 @@ async def llm_status() -> LLMStatus:
         ollama_available=bool(models),
         ollama_models=models,
     )
+
+
+# --------------------------------------------------------------------------- #
+# Credential / endpoint validation (the Settings "Verify" / "Test" buttons)
+# --------------------------------------------------------------------------- #
+
+# Provider SDK/litellm errors can echo the candidate key (e.g. "Incorrect API
+# key provided: sk-..."). Scrub anything key-shaped before returning it to the UI.
+_KEY_RE = re.compile(r"(sk-[A-Za-z0-9_\-]{4,}|Bearer\s+\S{6,}|api[_-]?key['\"=:\s]+\S{6,})", re.I)
+
+
+def _redact(msg: str) -> str:
+    return _KEY_RE.sub("[REDACTED]", msg or "")
+
+
+async def _probe(real_model: str, extra: dict[str, Any], *, timeout: float = 20.0) -> dict:
+    """One tiny live completion; reports ok/latency/error without ever raising."""
+    import asyncio
+    import time
+
+    import litellm
+
+    litellm.drop_params = True
+    litellm.suppress_debug_info = True
+    started = time.monotonic()
+    try:
+        resp = await asyncio.wait_for(
+            litellm.acompletion(
+                model=real_model,
+                messages=[{"role": "user", "content": "Reply with the single word OK."}],
+                max_tokens=5,
+                **extra,
+            ),
+            timeout=timeout,
+        )
+        sample = (resp.choices[0].message.content or "").strip()
+        latency = int((time.monotonic() - started) * 1000)
+        if sample:
+            return {"ok": True, "latency_ms": latency, "sample": sample[:40], "error": None}
+        return {"ok": False, "latency_ms": latency, "sample": "", "error": "empty response"}
+    except asyncio.TimeoutError:
+        return {
+            "ok": False,
+            "latency_ms": int((time.monotonic() - started) * 1000),
+            "sample": "",
+            "error": "timeout",
+        }
+    except Exception as exc:
+        return {
+            "ok": False,
+            "latency_ms": int((time.monotonic() - started) * 1000),
+            "sample": "",
+            "error": _redact(str(exc)) or exc.__class__.__name__,
+        }
+
+
+async def validate_key(provider: str, key: str) -> dict:
+    """Make a tiny live call with a candidate cloud key (does NOT store it)."""
+    model = CLOUD_DEFAULTS.get(provider)
+    if not model:
+        return {"ok": False, "latency_ms": 0, "sample": "", "error": f"unknown provider: {provider}"}
+    if not key:
+        return {"ok": False, "latency_ms": 0, "sample": "", "error": "empty key"}
+    return await _probe(model, {"api_key": key})
+
+
+async def test_endpoint(base_url: str, model: str, api_key: str | None = None) -> dict:
+    """Live test of a self-hosted OpenAI-compatible endpoint (does NOT store)."""
+    if not base_url or not model:
+        return {"ok": False, "latency_ms": 0, "sample": "", "error": "base_url and model required"}
+    extra = {"api_base": base_url, "api_key": api_key or "sk-noauth"}
+    return await _probe("openai/" + model, extra)
