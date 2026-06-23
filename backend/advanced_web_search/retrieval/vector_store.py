@@ -57,7 +57,9 @@ def _sanitize_fts(query: str, *, max_terms: int = 32) -> str:
 # Indexing
 # --------------------------------------------------------------------------- #
 
-def _index_sources_sync(run_id: int, sources: list[dict]) -> int:
+def _index_sources_sync(
+    run_id: int, sources: list[dict], contexts: dict[int, str] | None = None
+) -> int:
     total = 0
     vec_ok = False
     try:
@@ -75,6 +77,7 @@ def _index_sources_sync(run_id: int, sources: list[dict]) -> int:
             log.warning("sqlite_vec serialize unavailable; indexing lexical-only: %s", exc)
             vec_ok = False
 
+    contexts = contexts or {}
     for src in sources or []:
         try:
             source_id = src.get("id")
@@ -87,7 +90,19 @@ def _index_sources_sync(run_id: int, sources: list[dict]) -> int:
             if not chunks:
                 continue
 
-            chunk_ids = repositories.add_chunks(int(source_id), chunks)
+            # Contextual Retrieval: prepend a per-source situating prefix so every
+            # chunk — including later ones that lost the title — carries document
+            # context into BOTH the embedding and the FTS index. The raw chunk is
+            # stored separately (raw_text) for clean display. No prefix → today's
+            # behaviour (raw_text NULL, readers COALESCE back to text).
+            ctx = contexts.get(int(source_id)) if source_id is not None else None
+            if ctx:
+                indexed = [f"{ctx}\n{ch}" for ch in chunks]
+                chunk_ids = repositories.add_chunks(int(source_id), indexed, raw_texts=chunks)
+                embed_input = indexed
+            else:
+                chunk_ids = repositories.add_chunks(int(source_id), chunks)
+                embed_input = chunks
             total += len(chunk_ids)
         except Exception as exc:
             log.warning("indexing source %s failed: %s", src.get("id"), exc)
@@ -99,7 +114,7 @@ def _index_sources_sync(run_id: int, sources: list[dict]) -> int:
         try:
             vectors = None
             # aembed in a sync context: drive a private event loop-free path
-            vectors = _embed_sync(chunks)
+            vectors = _embed_sync(embed_input)
             if not vectors or len(vectors) != len(chunk_ids):
                 continue
             with db.tx() as conn:
@@ -124,10 +139,17 @@ def _embed_sync(texts: list[str]) -> list[list[float]]:
         return []
 
 
-async def index_sources(run_id: int, sources: list[dict]) -> int:
-    """Chunk + persist + (optionally) vector-index each source. Returns chunk count."""
+async def index_sources(
+    run_id: int, sources: list[dict], contexts: dict[int, str] | None = None
+) -> int:
+    """Chunk + persist + (optionally) vector-index each source. Returns chunk count.
+
+    ``contexts`` maps source_id -> a 1-sentence situating prefix (Contextual
+    Retrieval); when present that prefix is folded into the embedded + FTS-indexed
+    text while the raw chunk is preserved for display.
+    """
     try:
-        return await asyncio.to_thread(_index_sources_sync, run_id, sources)
+        return await asyncio.to_thread(_index_sources_sync, run_id, sources, contexts)
     except Exception as exc:  # pragma: no cover - defensive
         log.warning("index_sources failed: %s", exc)
         return 0
@@ -207,8 +229,12 @@ def _fetch_chunk_rows(chunk_ids: list[int]) -> dict[int, dict]:
     try:
         conn = db.get_conn()
         placeholders = ",".join("?" for _ in chunk_ids)
+        # Return the RAW (un-contextualized) chunk for display; falls back to the
+        # indexed `text` when no separate raw_text was stored (contextual
+        # retrieval off / older rows).
         rows = conn.execute(
-            f"SELECT id, source_id, text FROM chunks WHERE id IN ({placeholders})",
+            f"SELECT id, source_id, COALESCE(raw_text, text) AS text "
+            f"FROM chunks WHERE id IN ({placeholders})",
             tuple(int(c) for c in chunk_ids),
         ).fetchall()
         return {int(r["id"]): {"text": r["text"], "source_id": int(r["source_id"])} for r in rows}

@@ -210,6 +210,11 @@ class RunOut(BaseModel):
     error: Optional[str] = None
     started_at: str
     finished_at: Optional[str] = None
+    # Accumulated LLM accounting for the run (0 for older rows / local Ollama).
+    tokens_in: int = 0
+    tokens_out: int = 0
+    cost_usd: float = 0.0
+    llm_calls: int = 0
 
 
 class RunQueryOut(BaseModel):
@@ -388,7 +393,8 @@ EventType = Literal[
     "run_started", "status", "node_started", "node_finished",
     "plan", "subtopic", "awaiting_approval",
     "source_found", "source_scored", "query", "claim", "citation_verified",
-    "token", "report", "report_grounding", "report_quality", "run_finished", "error", "log",
+    "token", "report", "report_grounding", "report_quality", "run_cost",
+    "run_finished", "error", "log",
 ]
 
 

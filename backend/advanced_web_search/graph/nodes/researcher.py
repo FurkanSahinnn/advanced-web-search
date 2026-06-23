@@ -22,7 +22,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 
-from ...config import get_settings
+from ...config import depth_preset, get_settings
 from ...db import repositories
 from ...embeddings import reranker
 from ...llm.provider import chat_json
@@ -38,6 +38,9 @@ _FULLTEXT_CHARS = 6000
 _FULLTEXT_ACADEMIC_LIMIT = 4
 _FULLTEXT_ACADEMIC_CHARS = 8000
 _FULLTEXT_MIN_LEN = 400  # candidates with shorter full_text are eligible for enrichment
+# Contextual Retrieval: cap how many sources are sent to the (single batched)
+# context LLM call per subtopic; the rest fall back to a free metadata prefix.
+_MAX_CONTEXTUALIZE = 20
 
 
 def _leaves(approved: list[dict]) -> list[dict]:
@@ -54,6 +57,7 @@ async def expand_queries(
     n: int,
     bilingual: bool,
     model_role: str = "moderator",
+    hint: str | None = None,
 ) -> list[str]:
     """Return [question] plus up to n-1 query variants (multi-query expansion).
 
@@ -88,8 +92,13 @@ async def expand_queries(
     translate_line = (
         f"- exactly one faithful translation into '{other}',\n" if bilingual else ""
     )
+    # Reflexion hint: when a prior verification pass found the cited sources did
+    # not support a claim, bias the re-research variants toward the missing
+    # evidence (the bare question still anchors reranking — see the caller).
+    focus_line = f"\nFOCUS the queries on finding: {hint}\n" if hint else ""
     user = (
-        f"ORIGINAL QUESTION (language={lang}):\n{base}\n\n"
+        f"ORIGINAL QUESTION (language={lang}):\n{base}\n"
+        f"{focus_line}\n"
         f"Produce up to {max(1, n - 1)} ALTERNATIVE search queries:\n"
         f"{translate_line}"
         "- one 'step-back' broader query: the more general topic this question is "
@@ -127,6 +136,76 @@ async def expand_queries(
     return out[:n] or [base]
 
 
+def _metadata_context(s: dict) -> str:
+    """Free, LLM-less situating line for a source (title + venue/year)."""
+    title = str(s.get("title") or "").strip()
+    if not title:
+        return ""
+    bits = []
+    venue = str(s.get("venue") or s.get("provider") or "").strip()
+    year = str(s.get("published_date") or "")[:4]
+    if venue:
+        bits.append(venue)
+    if year and year.isdigit():
+        bits.append(year)
+    meta = f" ({', '.join(bits)})" if bits else ""
+    return truncate(f"{title}{meta}".strip(), 200)
+
+
+async def _build_source_contexts(sources: list[dict], language: str) -> dict[int, str]:
+    """Contextual Retrieval prefixes: {source_id -> one situating sentence}.
+
+    Every source starts with a free metadata line; the strongest
+    ``_MAX_CONTEXTUALIZE`` are then enriched with an LLM-written one-liner via a
+    SINGLE batched ``chat_json`` call (cheap — one call per subtopic, not one per
+    chunk). Fully defensive: any failure leaves the metadata fallback in place.
+    """
+    out: dict[int, str] = {}
+    for s in sources:
+        sid = s.get("id")
+        if isinstance(sid, int):
+            meta = _metadata_context(s)
+            if meta:
+                out[sid] = meta
+
+    targets = [s for s in sources if isinstance(s.get("id"), int)][:_MAX_CONTEXTUALIZE]
+    if not targets:
+        return out
+
+    listing = "\n".join(
+        f"{i + 1}. {truncate(str(s.get('title') or '(untitled)'), 120)} — "
+        f"{truncate(str(s.get('abstract') or s.get('full_text') or ''), 220)}"
+        for i, s in enumerate(targets)
+    )
+    system = (
+        "You situate research sources. For each source you write ONE short, "
+        "factual sentence describing what it is about, so a snippet pulled from it "
+        "keeps its context. No preamble, no opinions."
+    )
+    user = (
+        f"SOURCES TO SITUATE (numbered):\n{listing}\n\n"
+        f"Return ONE situating sentence per source, in the SAME order. Reply in "
+        f"LANGUAGE: {language}.\n"
+        'Return ONLY JSON: {"contexts": [str, ...]} with exactly one string per '
+        "numbered source. JSON only, no prose, no code fences."
+    )
+    try:
+        raw = await chat_json("moderator", [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ])
+    except Exception:
+        return out
+    items = raw.get("contexts") if isinstance(raw, dict) else (raw if isinstance(raw, list) else [])
+    if isinstance(items, list):
+        for i, s in enumerate(targets):
+            if i < len(items):
+                c = str(items[i] or "").strip()
+                if c:
+                    out[s["id"]] = truncate(c, 300)
+    return out
+
+
 async def researcher(state: dict) -> dict:
     run_id = state["run_id"]
     language = state.get("language")
@@ -140,6 +219,19 @@ async def researcher(state: dict) -> dict:
                                 getattr(settings, "max_sources_per_subtopic", 25)))
     bilingual = bool(state.get("bilingual"))
     query_variants = int(state.get("query_variants", getattr(settings, "query_variants", 1)) or 1)
+    contextual_on = bool(depth_preset(state.get("depth")).get("contextual_retrieval", False))
+
+    # Reflexion: subtopic_id -> the verifier's note about WHY a prior claim was
+    # unsupported. Injected into THIS round's query expansion for the re-research
+    # targets so the retry hunts for the missing evidence instead of repeating.
+    reflections: dict[int, str] = {}
+    for n in state.get("verifier_notes") or []:
+        if not isinstance(n, dict):
+            continue
+        sid = n.get("subtopic_id")
+        r = str(n.get("reflection") or "").strip()
+        if isinstance(sid, int) and r and sid not in reflections:
+            reflections[sid] = r
 
     subtopics = list(state.get("subtopics") or [])
     approved = [s for s in subtopics if s.get("approved")]
@@ -184,12 +276,16 @@ async def researcher(state: dict) -> dict:
 
         # --- multi-query expansion (paraphrase + step-back, +translation when
         # bilingual). Now fires for monolingual runs too: any run with
-        # query_variants > 1 widens recall, not just bilingual ones. ---
+        # query_variants > 1 widens recall, not just bilingual ones. A Reflexion
+        # hint (re-research target) forces a targeted expansion even on a
+        # single-query preset so the retry actually changes its search. ---
+        hint = reflections.get(sid_topic) if isinstance(sid_topic, int) else None
         queries = [q]
-        if query_variants > 1:
+        if query_variants > 1 or hint:
             try:
                 queries = await expand_queries(
-                    q, language or "auto", query_variants, bilingual
+                    q, language or "auto", max(query_variants, 2) if hint else query_variants,
+                    bilingual, hint=hint,
                 )
             except Exception:
                 queries = [q]
@@ -323,8 +419,18 @@ async def researcher(state: dict) -> dict:
 
         collected = await _persist_candidates(run_id, cands, sid_topic)
 
+        # Contextual Retrieval: build a per-source situating prefix BEFORE indexing
+        # (one batched LLM call), so each chunk carries document context into the
+        # embedding + FTS index. Gated by the depth preset; defensive.
+        contexts = None
+        if contextual_on and collected:
+            try:
+                contexts = await _build_source_contexts(collected, language or "auto")
+            except Exception:
+                contexts = None
+
         try:
-            await vector_store.index_sources(run_id, collected)
+            await vector_store.index_sources(run_id, collected, contexts)
         except Exception:
             pass
 
@@ -373,6 +479,12 @@ async def researcher(state: dict) -> dict:
         "snowball_seed_ids": [],
         "gap_subtopic_ids": [],
         "reresearch_subtopic_ids": [],
+        # Reflexion notes drove THIS round's re-research; clear them so the
+        # re-synthesis that follows doesn't over-hedge a claim the just-finished
+        # re-research may have found support for (the verifier rewrites notes on
+        # its next pass). The fatal loop bypasses the researcher, so its notes
+        # still reach the synthesizer. LWW key — clearing is safe + durable.
+        "verifier_notes": [],
     }
     if errors:
         out["errors"] = errors

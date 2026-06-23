@@ -289,6 +289,17 @@ def _min_max_normalize(raw: list[float]) -> list[float]:
     return [(x - lo) / (hi - lo) for x in raw]
 
 
+def _sigmoid(x: float) -> float:
+    """Logistic squashing into (0, 1); numerically stable for large |x|."""
+    try:
+        if x >= 0:
+            return 1.0 / (1.0 + math.exp(-x))
+        ex = math.exp(x)
+        return ex / (1.0 + ex)
+    except Exception:
+        return 0.5
+
+
 # --------------------------------------------------------------------------- #
 # why_kept chip
 # --------------------------------------------------------------------------- #
@@ -391,8 +402,24 @@ async def score_sources(
         if not relevances:
             relevances = [0.6 for _ in sources]
 
+    # Absolute (batch-independent) rerank confidence per source, exposed for the
+    # CRAG sufficiency gate in the gap node. `relevance` above is min-max
+    # normalized WITHIN this batch — perfect as a weighting signal, useless as an
+    # absolute "are these documents actually on-topic?" judgement (the best of a
+    # bad batch still normalizes to 1.0). The sigmoid of the raw cross-encoder
+    # logit is a batch-free [0,1] relevance probability. It is ONLY meaningful
+    # with a real cross-encoder: in identity/degraded mode the raw scores are
+    # dummy descending values, so we leave it unset and the gap node falls back
+    # to the source-count proxy.
+    rerank_abs: list[Optional[float]] = [None] * len(sources)
+    try:
+        if len(raw_scores) == len(sources) and reranker.current_mode() == "cross_encoder":
+            rerank_abs = [_sigmoid(float(x)) for x in raw_scores]
+    except Exception:
+        rerank_abs = [None] * len(sources)
+
     results: list[dict] = []
-    for src, relevance in zip(sources, relevances):
+    for src, relevance, rabs in zip(sources, relevances, rerank_abs):
         try:
             authority = _authority(src)
             recency = _recency(src)
@@ -422,6 +449,9 @@ async def score_sources(
                 "evidence_type": evidence_type,
                 "weights": {k: round(v, 4) for k, v in norm_w.items()},
             }
+            if rabs is not None:
+                # Absolute cross-encoder relevance prob (CRAG sufficiency signal).
+                detail["rerank_abs"] = round(float(rabs), 4)
 
             breakdown = {
                 "relevance": comps["relevance"],

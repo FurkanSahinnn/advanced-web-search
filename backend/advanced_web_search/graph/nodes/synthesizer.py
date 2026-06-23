@@ -28,6 +28,35 @@ from ...utils.text import detect_language
 from ..events import emit
 
 
+def _reflexion_block(notes: Any) -> str:
+    """Render the verifier's Reflexion notes into a corrective prompt block.
+
+    On a re-synthesis pass `verifier_notes` holds short reflections about WHY
+    claims failed (dead links / unsupported). Surfacing them makes the rewrite
+    targeted. Empty string on the first pass (no notes yet).
+    """
+    if not notes:
+        return ""
+    lines: list[str] = []
+    seen: set[str] = set()
+    for n in notes:
+        if not isinstance(n, dict):
+            continue
+        r = str(n.get("reflection") or "").strip()
+        if r and r not in seen:
+            seen.add(r)
+            lines.append(f"- {r}")
+        if len(lines) >= 8:
+            break
+    if not lines:
+        return ""
+    return (
+        "\n\nPRIOR VERIFICATION FOUND THESE ISSUES — address them in this revision "
+        "(prefer better-grounded sources; drop or hedge claims you cannot "
+        "support):\n" + "\n".join(lines)
+    )
+
+
 def _report_token_budget(state: dict) -> int:
     """Max output tokens for the streamed report.
 
@@ -137,6 +166,10 @@ async def synthesizer(state: dict) -> dict:
     )
 
     instr_block = f"\n\nADDITIONAL USER INSTRUCTIONS:\n{extra_instructions}" if extra_instructions else ""
+    # Reflexion: on a re-synthesis pass the verifier has left short notes about
+    # WHY claims failed (dead links / unsupported). Surface them so the rewrite is
+    # corrective, not a blind retry. Empty on the first pass.
+    reflex_block = _reflexion_block(state.get("verifier_notes"))
 
     system = (
         "You are the Synthesizer of a deep-research system. You write a "
@@ -160,7 +193,7 @@ async def synthesizer(state: dict) -> dict:
             "first summarize where the sources broadly AGREE, then explicitly call out "
             "any points of DISAGREEMENT, contradiction, or notable uncertainty between "
             "the sources (state that there are no major disagreements if that is the case)."
-            f"{instr_block}"
+            f"{instr_block}{reflex_block}"
         )
 
     # --- generate the report(s): primary streams, others run concurrently ---

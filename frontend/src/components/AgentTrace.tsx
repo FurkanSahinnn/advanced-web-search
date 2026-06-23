@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import {
   Brain,
   CheckCircle2,
+  CircleDollarSign,
   CircleDot,
   FileText,
   Gavel,
@@ -62,6 +63,9 @@ function buildGroups(events: ResearchEvent[]): NodeGroup[] {
   };
 
   for (const ev of events) {
+    // run_cost is a run-level summary (it carries node=finalizer only as a
+    // convenience) — it's rendered as a standalone chip, not inside a node group.
+    if (ev.type === "run_cost") continue;
     const node = ev.node ?? inferNode(ev);
     if (!node) continue;
     const g = ensure(node);
@@ -130,6 +134,19 @@ export function AgentTrace({
       ),
     [events],
   );
+
+  // Run-level LLM token/cost summary — rendered as a standalone chip outside the
+  // node list (the frame's node=finalizer is ignored; buildGroups skips it).
+  const runCost = useMemo(() => {
+    for (let i = events.length - 1; i >= 0; i--) {
+      if (events[i].type === "run_cost") {
+        return events[i].data?.cost as
+          | { total_tokens?: number; cost_usd?: number; calls?: number }
+          | undefined;
+      }
+    }
+    return undefined;
+  }, [events]);
 
   if (groups.length === 0 && errorEvents.length === 0) {
     return (
@@ -222,6 +239,24 @@ export function AgentTrace({
           </li>
         );
       })}
+
+      {runCost && (runCost.total_tokens || runCost.calls) ? (
+        <li className="animate-in px-2 pt-1">
+          <div className="inline-flex items-center gap-1.5 rounded-md bg-[var(--color-surface-2)] px-2 py-1 text-[11px] text-[var(--color-muted)]">
+            <CircleDollarSign size={12} className="text-[var(--color-muted)]" />
+            <span className="font-medium text-[var(--color-fg)]">
+              {t("trace.cost.label")}
+            </span>
+            <span>
+              {(runCost.total_tokens ?? 0).toLocaleString()} {t("trace.chip.token")}
+              {runCost.cost_usd && runCost.cost_usd > 0
+                ? ` · $${runCost.cost_usd.toFixed(4)}`
+                : ""}
+              {runCost.calls ? ` · ${runCost.calls} ${t("trace.cost.calls")}` : ""}
+            </span>
+          </div>
+        </li>
+      ) : null}
     </ol>
   );
 }

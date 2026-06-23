@@ -81,6 +81,11 @@ class ResearchState(TypedDict, total=False):
     # the dominant relevance signal collapsed to provider order. Surfaced in the
     # trace + the report quality scorecard so the quality drop isn't silent.
     reranker_degraded: bool
+    # Per-subtopic absolute rerank confidence {str(subtopic_id): float in [0,1]},
+    # written by the ranker, read by the gap node's CRAG sufficiency grade.
+    # Recomputed over ALL candidates each ranker pass (candidates accumulate), so
+    # last-write-wins is complete each pass. Empty when the reranker is degraded.
+    rerank_confidence: dict[str, float]
 
     # --- synthesis ---
     claims: list[dict[str, Any]]           # {text, subtopic_id, citations:[{source_id,...}]}
@@ -156,6 +161,7 @@ def initial_state(
         candidates=[],
         ranked_sources=[],
         reranker_degraded=False,
+        rerank_confidence={},
         claims=[],
         report_markdown="",
         consensus_summary="",

@@ -117,6 +117,8 @@ const tr: Dict = {
   "trace.chip.verified": "doğrulandı",
   "trace.chip.token": "token",
   "trace.chip.degraded": "sıralama bozuldu",
+  "trace.cost.label": "LLM kullanımı",
+  "trace.cost.calls": "çağrı",
 
   "node.planner": "Planlayıcı",
   "node.moderator": "Moderatör",
@@ -581,6 +583,8 @@ const en: Dict = {
   "trace.chip.verified": "verified",
   "trace.chip.token": "tokens",
   "trace.chip.degraded": "ranking degraded",
+  "trace.cost.label": "LLM usage",
+  "trace.cost.calls": "calls",
 
   "node.planner": "Planner",
   "node.moderator": "Moderator",

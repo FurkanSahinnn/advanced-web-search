@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+from ...config import depth_preset
 from ...db import repositories
 from ...llm.provider import chat_json
 from ...utils.text import truncate
@@ -31,6 +32,19 @@ from ..events import emit
 # never let the decomposition grow without bound.
 _MAX_TOTAL_SUBTOPICS = 40
 _MAX_NEW_SUBTOPICS = 3
+
+# Corrective-RAG (CRAG, 2401.15884) sufficiency thresholds on a sub-question's
+# absolute rerank confidence (mean top-k cross-encoder relevance prob from the
+# ranker). >= SUFFICIENT = "Correct" (retrieval is strong, no follow-up needed);
+# < WEAK = "Incorrect" (off-topic/empty, needs a targeted rewrite); in between =
+# "Ambiguous" (also worth a follow-up). Only consulted when a real cross-encoder
+# produced a confidence; otherwise the gap node falls back to the count proxy.
+_CRAG_SUFFICIENT = 0.55
+_CRAG_WEAK = 0.30
+
+# Dynamic outline revision: at most this many NET-NEW angles the retrieved
+# sources reveal (but the planner missed) may be added in one round-1 pass.
+_MAX_OUTLINE_ADD = 2
 
 _ACADEMIC_PROVIDERS = {
     "openalex", "openalex-snowball", "arxiv", "crossref", "europepmc",
@@ -59,6 +73,62 @@ def _is_academic(src: dict) -> bool:
     return isinstance(cid, str) and (cid.startswith("doi:") or cid.startswith("arxiv:"))
 
 
+def _grade_coverage(
+    leaves: list[dict],
+    counts: dict[Any, int],
+    gap_min: int,
+    crag_on: bool,
+    confidence: dict[str, float],
+    reranker_degraded: bool,
+) -> tuple[list[dict], dict[Any, str], bool]:
+    """Decide which leaf sub-questions need a follow-up round (CRAG-aware).
+
+    Returns ``(under_covered, grades, all_sufficient)``:
+
+      * ``under_covered`` — leaves to send the moderator for a targeted follow-up.
+      * ``grades``        — ``{subtopic_id: label}`` for the trace log.
+      * ``all_sufficient``— True iff CRAG actually graded EVERY leaf and none came
+                            back weak/ambiguous (drives the gap-loop early-exit).
+
+    When CRAG is on AND a real rerank confidence exists for a leaf with sources,
+    grade by that absolute confidence (Correct / Ambiguous / Incorrect). Else —
+    CRAG off, reranker degraded, no confidence, or a zero-source leaf — fall back
+    to the historical kept-source COUNT proxy (``count < gap_min``) so behaviour
+    never regresses when the cross-encoder is unavailable.
+    """
+    under: list[dict] = []
+    grades: dict[Any, str] = {}
+    crag_graded = 0
+    for s in leaves:
+        sid = s.get("id")
+        cnt = counts.get(sid, 0)
+        conf = confidence.get(str(sid)) if isinstance(confidence, dict) else None
+        use_crag = (
+            crag_on and not reranker_degraded
+            and isinstance(conf, (int, float)) and cnt > 0
+        )
+        if use_crag:
+            crag_graded += 1
+            if conf >= _CRAG_SUFFICIENT:
+                grades[sid] = "sufficient"
+            elif conf < _CRAG_WEAK:
+                grades[sid] = "weak"
+                under.append(s)
+            else:
+                grades[sid] = "ambiguous"
+                under.append(s)
+        else:
+            if cnt < gap_min:
+                grades[sid] = "under"
+                under.append(s)
+            else:
+                grades[sid] = "covered"
+    # Early-exit is only justified when CRAG graded the WHOLE tree (no leaf fell
+    # back to the count proxy) and nothing needs a follow-up.
+    all_sufficient = crag_graded == len(leaves) and crag_graded > 0 and not under
+    return under, grades, all_sufficient
+
+
 async def gap_analyzer(state: dict) -> dict:
     run_id = state["run_id"]
     emit("node_started", run_id, node="gap_analyzer", message="Analyzing coverage gaps")
@@ -71,10 +141,14 @@ async def gap_analyzer(state: dict) -> dict:
         gap_min = int(state.get("gap_min_sources", 3) or 3)
         snowball_on = bool(state.get("snowball"))
         snowball_top_k = int(state.get("snowball_top_k", 0) or 0)
+        preset = depth_preset(state.get("depth"))
+        crag_on = bool(preset.get("crag", False))
+        outline_on = bool(preset.get("outline_revision", False))
+        confidence = state.get("rerank_confidence") or {}
+        reranker_degraded = bool(state.get("reranker_degraded"))
 
         ranked = list(state.get("ranked_sources") or [])
         subtopics = list(state.get("subtopics") or [])
-        researched = set(state.get("researched_subtopic_ids") or [])
 
         # --- kept-source count per subtopic ---
         counts: dict[Any, int] = {}
@@ -83,15 +157,40 @@ async def gap_analyzer(state: dict) -> dict:
             counts[sid] = counts.get(sid, 0) + 1
 
         leaves = _leaf_approved(subtopics)
-        under_covered = [
-            s for s in leaves
-            if counts.get(s.get("id"), 0) < gap_min
-        ]
+        # CRAG sufficiency grade (rerank-confidence based) with a count-proxy
+        # fallback; `all_sufficient` lets the loop exit early when retrieval is
+        # already strong instead of always burning the round budget.
+        under_covered, grades, all_sufficient = _grade_coverage(
+            leaves, counts, gap_min, crag_on, confidence, reranker_degraded
+        )
+        if crag_on and grades:
+            graded_str = ", ".join(
+                f"{counts.get(s.get('id'), 0)}src/"
+                f"{int((confidence.get(str(s.get('id'))) or 0) * 100)}%"
+                f"={grades.get(s.get('id'), '?')}"
+                for s in leaves[:8]
+            )
+            emit("log", run_id, node="gap_analyzer",
+                 message=f"CRAG grades [{graded_str}]"
+                         + (" — all sufficient" if all_sufficient else ""))
 
         # --- HARD STOP: never exceed the configured round cap ---
         if research_round >= max_rounds:
             emit("log", run_id, node="gap_analyzer",
                  message=f"Round {research_round}: research-round cap reached; finalizing.")
+            return {"needs_more_research": False}
+
+        # --- CRAG early-exit: retrieval is already strong everywhere, so don't
+        # spend another round just because the budget allows it. BUT never let it
+        # pre-empt the one-shot round-1 passes (snowball + outline revision) — those
+        # are independently useful and their knobs are independently overridable, so
+        # the early-exit must not silently swallow them. ---
+        snowball_pending = snowball_on and snowball_top_k > 0 and research_round == 1
+        outline_pending = outline_on and research_round == 1
+        if all_sufficient and not (snowball_pending or outline_pending):
+            emit("log", run_id, node="gap_analyzer",
+                 message=f"Round {research_round}: CRAG — all sub-questions "
+                         "sufficiently covered; finalizing early.")
             return {"needs_more_research": False}
 
         gap_subtopic_ids: list[int] = []
@@ -101,7 +200,7 @@ async def gap_analyzer(state: dict) -> dict:
         # --- 1) build follow-up sub-questions for the biggest gaps ---
         if under_covered and len(subtopics) < _MAX_TOTAL_SUBTOPICS:
             new_nodes = await _propose_followups(
-                state, under_covered, counts, language
+                state, under_covered, counts, language, grades
             )
             if new_nodes:
                 persisted_new = await _persist_new_subtopics(
@@ -112,6 +211,31 @@ async def gap_analyzer(state: dict) -> dict:
                     updated_subtopics.append(st)
                     new_subtopic_count += 1
                     emit("subtopic", run_id, node="gap_analyzer", subtopic=st)
+
+        # --- 1b) dynamic outline revision (content-driven, round 1 only) ---
+        # Add net-new angles the retrieved corpus reveals but the planner missed.
+        # One-shot (round 1) + additive + deduped, so the outline can grow toward
+        # the evidence without the gap loop oscillating across rounds.
+        total_now = len(subtopics) + len(updated_subtopics)
+        if outline_on and research_round == 1 and total_now < _MAX_TOTAL_SUBTOPICS:
+            existing_q = {_norm_q(str(s.get("question") or "")) for s in subtopics}
+            existing_q |= {_norm_q(str(s.get("question") or "")) for s in updated_subtopics}
+            revisions = await _propose_outline_revisions(
+                state, ranked, existing_q, language
+            )
+            if revisions:
+                persisted_rev = await _persist_new_subtopics(
+                    project_id, subtopics + updated_subtopics, revisions
+                )
+                for st in persisted_rev:
+                    gap_subtopic_ids.append(int(st["id"]))
+                    updated_subtopics.append(st)
+                    new_subtopic_count += 1
+                    emit("subtopic", run_id, node="gap_analyzer", subtopic=st)
+                if persisted_rev:
+                    emit("log", run_id, node="gap_analyzer",
+                         message=f"outline revision: +{len(persisted_rev)} new "
+                                 "angle(s) from retrieved content")
 
         # --- 2) one-shot citation snowballing (round 1 only) ---
         snowball_seed_ids: list[int] = []
@@ -179,13 +303,25 @@ async def _propose_followups(
     under_covered: list[dict],
     counts: dict[Any, int],
     language: str,
+    grades: dict[Any, str] | None = None,
 ) -> list[dict]:
     """Ask the moderator model for 1-3 specific follow-up sub-questions."""
     root_query = state.get("root_query", "")
+    grades = grades or {}
     # show the model the weakest gaps (lowest kept-source count first)
     gaps = sorted(under_covered, key=lambda s: counts.get(s.get("id"), 0))[:5]
+
+    def _grade_note(sid: Any) -> str:
+        g = grades.get(sid)
+        if g == "weak":
+            return ", retrieval=off-topic"
+        if g == "ambiguous":
+            return ", retrieval=weak"
+        return ""
+
     gap_lines = "\n".join(
-        f"- (id={s.get('id')}, kept_sources={counts.get(s.get('id'), 0)}) "
+        f"- (id={s.get('id')}, kept_sources={counts.get(s.get('id'), 0)}"
+        f"{_grade_note(s.get('id'))}) "
         f"{truncate(str(s.get('question') or ''), 200)}"
         for s in gaps
     )
@@ -251,6 +387,89 @@ def _coerce_followups(raw: Any) -> list:
         if "question" in raw:
             return [raw]
     return []
+
+
+def _norm_q(text: str) -> str:
+    """Lowercased alphanumeric signature of a question for cheap dedup."""
+    return "".join(ch for ch in (text or "").lower() if ch.isalnum())
+
+
+async def _propose_outline_revisions(
+    state: dict,
+    ranked: list[dict],
+    existing_questions: set[str],
+    language: str,
+) -> list[dict]:
+    """Dynamic outline revision: propose NET-NEW angles the SOURCES reveal.
+
+    Distinct from ``_propose_followups`` (which refines UNDER-covered existing
+    sub-questions): this reads a digest of what was actually retrieved and asks
+    whether the corpus surfaces an important facet the planner's outline misses.
+    Strictly additive and deduped against the current tree — redundancy/merge is
+    only advised in the log, never destructively dropped, so the loop can't
+    oscillate. Returns up to ``_MAX_OUTLINE_ADD`` new subtopic specs (parent_id
+    None = top-level angle). ``[]`` on any failure.
+    """
+    root_query = state.get("root_query", "")
+    # Digest of the strongest retrieved sources (title + abstract snippet).
+    def _fs(s: dict) -> float:
+        try:
+            return float(s.get("final_score") or 0.0)
+        except Exception:
+            return 0.0
+
+    top = sorted(ranked, key=_fs, reverse=True)[:12]
+    if not top:
+        return []
+    digest = "\n".join(
+        f"- {truncate(str(s.get('title') or ''), 120)}: "
+        f"{truncate(str(s.get('abstract') or ''), 160)}"
+        for s in top
+    )
+    system = (
+        "You are the Moderator of a multi-agent deep-research system. You revise "
+        "the research OUTLINE based on what the retrieval ACTUALLY surfaced — "
+        "spotting important facets the original plan missed."
+    )
+    user = (
+        f"RESEARCH GOAL:\n{root_query}\n\n"
+        f"RETRIEVED SOURCES (digest):\n{digest}\n\n"
+        f"Looking at what was retrieved, propose up to {_MAX_OUTLINE_ADD} IMPORTANT "
+        "NEW sub-questions that these sources show are relevant to the goal "
+        "but that a typical outline would have OVERLOOKED. Only add genuinely new "
+        "angles — do NOT restate facets already obviously covered.\n\n"
+        'Return ONLY JSON: {"add":[{"question": str, "perspective": str}]}.\n'
+        f"- Reply in this LANGUAGE: {language}.\n"
+        "- JSON only, no prose, no code fences. Empty add list is fine."
+    )
+    messages = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": user},
+    ]
+    try:
+        raw = await chat_json("moderator", messages)
+    except Exception:
+        return []
+    items = raw.get("add") if isinstance(raw, dict) else (raw if isinstance(raw, list) else [])
+    if not isinstance(items, list):
+        return []
+    out: list[dict] = []
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        q = str(it.get("question") or "").strip()
+        if not q or _norm_q(q) in existing_questions:
+            continue
+        existing_questions.add(_norm_q(q))
+        out.append({
+            "question": truncate(q, 800),
+            "parent_id": None,
+            "perspective": (str(it.get("perspective")).strip()
+                            if it.get("perspective") else "outline revision"),
+        })
+        if len(out) >= _MAX_OUTLINE_ADD:
+            break
+    return out
 
 
 async def _persist_new_subtopics(

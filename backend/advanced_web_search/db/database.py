@@ -203,6 +203,30 @@ def _apply_migrations(conn) -> None:
     if "support_score" not in ccols:
         conn.execute("ALTER TABLE citations ADD COLUMN support_score REAL")
 
+    # Per-run LLM accounting: accumulated prompt/completion tokens, the $ estimate
+    # (0 for local Ollama, best-effort for cloud), and the LLM call count. Written
+    # additively by the runner after each stream pass (so a HITL run accumulates
+    # the paused planner/moderator cost too). Older rows default to 0.
+    rncols = _column_names(conn, "runs")
+    if "tokens_in" not in rncols:
+        conn.execute("ALTER TABLE runs ADD COLUMN tokens_in INTEGER NOT NULL DEFAULT 0")
+    if "tokens_out" not in rncols:
+        conn.execute("ALTER TABLE runs ADD COLUMN tokens_out INTEGER NOT NULL DEFAULT 0")
+    if "cost_usd" not in rncols:
+        conn.execute("ALTER TABLE runs ADD COLUMN cost_usd REAL NOT NULL DEFAULT 0")
+    if "llm_calls" not in rncols:
+        conn.execute("ALTER TABLE runs ADD COLUMN llm_calls INTEGER NOT NULL DEFAULT 0")
+
+    # Contextual Retrieval: `chunks.text` stores the CONTEXTUALIZED chunk (a
+    # situating prefix + the chunk), which is what gets embedded into vec_chunks
+    # and FTS-indexed (so a chunk that lost its document context still matches).
+    # `raw_text` keeps the original un-prefixed chunk so excerpts shown to the
+    # user (Ask-the-Report) stay clean. NULL = no context was added (older rows /
+    # contextual_retrieval off), and readers COALESCE back to `text`.
+    chcols = _column_names(conn, "chunks")
+    if "raw_text" not in chcols:
+        conn.execute("ALTER TABLE chunks ADD COLUMN raw_text TEXT")
+
 
 def _load_sqlite_vec(conn: sqlite3.Connection) -> bool:
     try:

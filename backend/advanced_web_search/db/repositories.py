@@ -101,6 +101,29 @@ def set_run_status(run_id: int, status: str, error: Optional[str] = None) -> Non
         )
 
 
+def add_run_cost(run_id: int, cost: dict) -> None:
+    """Accumulate one stream pass's LLM token/cost totals onto the run.
+
+    Additive (COALESCE + add) so a HITL run that streams in two passes — the
+    paused planner/moderator pass, then the post-approval pass — ends with the
+    full run total rather than just the last pass. Best-effort; missing keys
+    default to 0.
+    """
+    if not isinstance(cost, dict):
+        return
+    ti = int(cost.get("prompt_tokens", 0) or 0)
+    to = int(cost.get("completion_tokens", 0) or 0)
+    usd = float(cost.get("cost_usd", 0.0) or 0.0)
+    calls = int(cost.get("calls", 0) or 0)
+    with tx() as c:
+        c.execute(
+            "UPDATE runs SET tokens_in=COALESCE(tokens_in,0)+?, "
+            "tokens_out=COALESCE(tokens_out,0)+?, cost_usd=COALESCE(cost_usd,0)+?, "
+            "llm_calls=COALESCE(llm_calls,0)+? WHERE id=?",
+            (ti, to, usd, calls, run_id),
+        )
+
+
 # --------------------------------------------------------------------------- #
 # Subtopics
 # --------------------------------------------------------------------------- #
@@ -226,12 +249,23 @@ def set_source_fulltext(source_id: int, full_text: str) -> None:
         c.execute("UPDATE sources SET full_text=? WHERE id=?", (full_text, source_id))
 
 
-def add_chunks(source_id: int, texts: list[str]) -> list[int]:
+def add_chunks(
+    source_id: int, texts: list[str], raw_texts: Optional[list[str]] = None
+) -> list[int]:
+    """Insert chunk rows; `texts` is the indexed (possibly contextualized) text.
+
+    When ``raw_texts`` is given (Contextual Retrieval on), ``text`` holds the
+    contextualized string that FTS indexes + the embedder embeds, while
+    ``raw_text`` keeps the original un-prefixed chunk for clean display. When it
+    is None ``raw_text`` stays NULL and readers COALESCE back to ``text``.
+    """
     def _do(c: sqlite3.Connection) -> list[int]:
         ids: list[int] = []
         for i, t in enumerate(texts):
+            raw = raw_texts[i] if raw_texts is not None and i < len(raw_texts) else None
             cur = c.execute(
-                "INSERT INTO chunks(source_id, ordinal, text) VALUES(?,?,?)", (source_id, i, t)
+                "INSERT INTO chunks(source_id, ordinal, text, raw_text) VALUES(?,?,?,?)",
+                (source_id, i, t, raw),
             )
             ids.append(int(cur.lastrowid))
         return ids

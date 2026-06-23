@@ -64,6 +64,19 @@ CLOUD_DEFAULTS: dict[str, str] = {
     "openrouter": "openrouter/anthropic/claude-haiku-4.5",
 }
 
+# Stronger sibling per provider, used by llm.provider.escalate() to re-verify a
+# CONTESTED claim with a more capable model when a cloud key is present ("Small
+# LMs Need Strong Verifiers", 2404.17140). A provider whose default is already
+# its strongest cheap option maps to itself (escalation is then a no-op).
+CLOUD_STRONG: dict[str, str] = {
+    "anthropic": "anthropic/claude-sonnet-4-5",
+    "openai": "openai/gpt-4o",
+    "gemini": "gemini/gemini-2.5-pro",
+    "groq": "groq/llama-3.3-70b-versatile",
+    "deepseek": "deepseek/deepseek-reasoner",
+    "openrouter": "openrouter/anthropic/claude-sonnet-4.5",
+}
+
 # Default multi-signal source-ranking weights (must sum to ~1.0).
 DEFAULT_SCORE_WEIGHTS: dict[str, float] = {
     "relevance": 0.40,
@@ -94,30 +107,59 @@ DEFAULT_SCORE_WEIGHTS: dict[str, float] = {
 #   entail_votes -> how many independent samples the verifier draws per
 #                   (claim, passage) entailment judgement, taking the majority
 #                   verdict (self-consistency). 1 = today's single-sample path.
+#   crag         -> Corrective-RAG sufficiency gate in the gap node: grade each
+#                   sub-question by the ranker's ABSOLUTE rerank confidence
+#                   (Correct/Ambiguous/Incorrect) instead of a raw kept-source
+#                   COUNT, trigger a targeted follow-up only on the weak ones,
+#                   and early-exit the gap loop when every sub-question is already
+#                   well-covered (don't burn the round budget). Falls back to the
+#                   count proxy when the reranker is degraded. Off for quick.
+#   outline_revision -> let the gap node revise the OUTLINE from what was actually
+#                   retrieved: a one-shot (round 1) pass that proposes new angles
+#                   the sources reveal but the planner missed (additive, deduped,
+#                   capped). Biased additive to avoid oscillation. Deep+ only.
+#   contextual_retrieval -> Anthropic-style Contextual Retrieval at ingest: prepend
+#                   a 1-sentence situating blurb (one batched local-LLM call per
+#                   source group, metadata fallback) to each chunk BEFORE embedding
+#                   + FTS indexing, so a chunk that lost its document context still
+#                   matches. Raw chunk is kept separately for display. Deep+ only.
+#   verifier_escalation -> when an entailment verdict comes back CONTESTED
+#                   (unsupported/partial), re-check that claim ONCE with a stronger
+#                   model (next Ollama tier, RAM-clamped, or the provider's strong
+#                   cloud sibling) and adopt the verdict only if MORE supportive —
+#                   rescuing small-model false negatives. Deep+ only.
 DEPTH_PRESETS: dict[str, dict] = {
     "quick": {
         "max_subtopics": 4, "results_per_source": 6, "max_sources_per_subtopic": 12,
         "max_research_rounds": 1, "snowball": False, "snowball_top_k": 0,
         "bilingual": False, "recursion_depth": 1, "report_max_tokens": 4000,
-        "self_refine": False, "entail_votes": 1, "query_variants": 1,
+        "self_refine": False, "entail_votes": 1, "query_variants": 1, "crag": False,
+        "outline_revision": False, "contextual_retrieval": False,
+        "verifier_escalation": False,
     },
     "standard": {
         "max_subtopics": 8, "results_per_source": 8, "max_sources_per_subtopic": 20,
         "max_research_rounds": 2, "snowball": False, "snowball_top_k": 0,
         "bilingual": True, "recursion_depth": 1, "report_max_tokens": 6000,
-        "self_refine": False, "entail_votes": 1, "query_variants": 3,
+        "self_refine": False, "entail_votes": 1, "query_variants": 3, "crag": True,
+        "outline_revision": False, "contextual_retrieval": False,
+        "verifier_escalation": False,
     },
     "deep": {
         "max_subtopics": 12, "results_per_source": 10, "max_sources_per_subtopic": 30,
         "max_research_rounds": 3, "snowball": True, "snowball_top_k": 8,
         "bilingual": True, "recursion_depth": 2, "report_max_tokens": 8000,
-        "self_refine": True, "entail_votes": 3, "query_variants": 3,
+        "self_refine": True, "entail_votes": 3, "query_variants": 3, "crag": True,
+        "outline_revision": True, "contextual_retrieval": True,
+        "verifier_escalation": True,
     },
     "exhaustive": {
         "max_subtopics": 18, "results_per_source": 12, "max_sources_per_subtopic": 45,
         "max_research_rounds": 4, "snowball": True, "snowball_top_k": 15,
         "bilingual": True, "recursion_depth": 2, "report_max_tokens": 8000,
-        "self_refine": True, "entail_votes": 3, "query_variants": 3,
+        "self_refine": True, "entail_votes": 3, "query_variants": 3, "crag": True,
+        "outline_revision": True, "contextual_retrieval": True,
+        "verifier_escalation": True,
     },
 }
 DEFAULT_DEPTH = "quick"

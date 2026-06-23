@@ -68,6 +68,13 @@ async def ranker(state: dict) -> dict:
     kept_list: list[dict] = []
     errors: list[str] = []
     scored_any = False
+    # Per-subtopic absolute rerank confidence (mean of the top-k sources'
+    # batch-independent cross-encoder relevance prob), surfaced to the gap node
+    # for CRAG sufficiency grading. Keyed by str(subtopic_id) so it stays
+    # msgpack/JSON-safe in the checkpointed state. Empty when the reranker is in
+    # identity/degraded mode (no absolute signal) — the gap node then falls back
+    # to the source-count proxy.
+    rerank_confidence: dict[str, float] = {}
 
     for subtopic_id, group in groups.items():
         query = question_of.get(subtopic_id, "")
@@ -82,6 +89,21 @@ async def ranker(state: dict) -> dict:
         except Exception as exc:
             errors.append(f"ranker[{subtopic_id}]: score_sources failed: {exc}")
             continue
+
+        # Aggregate the absolute rerank confidence for this subtopic: the mean of
+        # the top-3 sources' rerank_abs answers "did retrieval surface at least a
+        # few genuinely on-topic documents?" — robust to one strong source and to
+        # a long tail of weak ones. Absent unless a real cross-encoder ran.
+        abs_vals = [
+            float(v)
+            for r in results
+            if isinstance((v := ((r.get("breakdown") or {}).get("detail") or {})
+                           .get("rerank_abs")), (int, float))
+        ]
+        if abs_vals and subtopic_id is not None:
+            abs_vals.sort(reverse=True)
+            top = abs_vals[:3]
+            rerank_confidence[str(subtopic_id)] = round(sum(top) / len(top), 4)
 
         # index group by source id for merge
         by_id = {c.get("id"): c for c in group}
@@ -117,6 +139,8 @@ async def ranker(state: dict) -> dict:
              degraded=True)
 
     out: dict = {"ranked_sources": _dedup_by_id(kept_list), "reranker_degraded": degraded}
+    if rerank_confidence:
+        out["rerank_confidence"] = rerank_confidence
     if errors:
         out["errors"] = errors
     return out

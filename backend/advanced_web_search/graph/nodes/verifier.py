@@ -25,7 +25,7 @@ from urllib.parse import urlsplit
 from ...config import depth_preset, get_settings
 from ...db import repositories
 from ...embeddings import embedder
-from ...llm.provider import chat_json
+from ...llm.provider import chat_json, escalate, resolve
 from ...utils.http import check_url_alive, fetch_text
 from ...utils.text import extract_main_text
 from ..events import emit
@@ -245,8 +245,14 @@ async def _rank_passage(
     return passages[best_i], float(scores[best_i]) if scores else 0.0, False
 
 
-async def _entail(claim: str, passage: str, *, temperature: float = 0.2) -> tuple[str, str]:
-    """LLM judgement: does `passage` support `claim`? Returns (verdict, quote)."""
+async def _entail(
+    claim: str, passage: str, *, temperature: float = 0.2, role_or_model: str = "verifier"
+) -> tuple[str, str]:
+    """LLM judgement: does `passage` support `claim`? Returns (verdict, quote).
+
+    ``role_or_model`` is normally the "verifier" role; the escalation path passes
+    a stronger raw model id instead (``resolve`` is pass-through for raw ids).
+    """
     system = (
         "You judge whether a SOURCE PASSAGE supports a CLAIM. Decide ONLY from "
         "the passage, never from outside knowledge. Output strict JSON only."
@@ -261,7 +267,7 @@ async def _entail(claim: str, passage: str, *, temperature: float = 0.2) -> tupl
         "- unsupported: the passage does not back the claim, or contradicts it."
     )
     try:
-        raw = await chat_json("verifier", [
+        raw = await chat_json(role_or_model, [
             {"role": "system", "content": system},
             {"role": "user", "content": user},
         ], temperature=temperature)
@@ -322,11 +328,15 @@ async def _verify_support(
     passages: list[str],
     passage_vecs: list[list[float]],
     votes: int = 1,
+    escalate_model: Optional[str] = None,
 ) -> tuple[Optional[str], Optional[float], Optional[str]]:
     """Entailment verdict for one (claim, source) pair.
 
     Returns (support, support_score, quote). support is None only when the check
-    could not run at all (caller leaves any prior value untouched).
+    could not run at all (caller leaves any prior value untouched). When
+    ``escalate_model`` is set and the small judge returns a CONTESTED verdict
+    (unsupported/partial), the claim is re-checked ONCE with that stronger model
+    and the verdict is upgraded only if the strong judge is MORE supportive.
     """
     if not claim_text:
         return None, None, None
@@ -342,6 +352,23 @@ async def _verify_support(
         # Prefilter rejects: clearly off-topic, no LLM needed.
         return "unsupported", support_score, ""
     verdict, quote = await _entail_consensus(claim_text, best_passage, votes=votes)
+
+    # Strong-verifier escalation: a small local judge is most error-prone exactly
+    # when it rejects a claim. Re-check a contested verdict once with a stronger
+    # model and adopt it ONLY if it is more supportive (rescue a false negative;
+    # never let escalation downgrade a verdict).
+    if escalate_model and verdict in ("unsupported", "partial"):
+        try:
+            e_verdict, e_quote = await _entail(
+                claim_text, best_passage, role_or_model=escalate_model
+            )
+            if _SUPPORTIVENESS.get(e_verdict, -1) > _SUPPORTIVENESS.get(verdict, -1):
+                verdict = e_verdict
+                if e_quote:
+                    quote = e_quote
+        except Exception:
+            pass
+
     return verdict, support_score, (quote or best_passage)[:_QUOTE_CHARS]
 
 
@@ -354,7 +381,23 @@ async def verifier(state: dict) -> dict:
     max_iters = int(getattr(settings, "verifier_max_iterations", 2))
     # Self-consistency: how many independent entailment samples to majority-vote
     # per (claim, passage). Driven by the depth preset (1 = single-sample).
-    votes = int(depth_preset(state.get("depth")).get("entail_votes", 1) or 1)
+    preset = depth_preset(state.get("depth"))
+    votes = int(preset.get("entail_votes", 1) or 1)
+    # Strong-verifier escalation: a stronger model id used to re-check CONTESTED
+    # claims. Resolved once (None when off, or when no stronger model exists).
+    escalate_model: Optional[str] = None
+    if preset.get("verifier_escalation"):
+        # Deterministic log (no host-RAM-dependent model id in the trace); the
+        # actual escalation target stays RAM-clamped below.
+        emit("log", run_id, node="verifier",
+             message="verifier escalation enabled for contested claims")
+        try:
+            base = resolve("verifier")
+            esc = escalate("verifier")
+            if esc and esc != base:
+                escalate_model = esc
+        except Exception:
+            escalate_model = None
     fetched = 0  # bounded full-text fetch budget for otherwise-unverifiable citations
 
     errors: list[str] = []
@@ -365,6 +408,11 @@ async def verifier(state: dict) -> dict:
     except Exception as exc:
         errors.append(f"verifier: get_claims failed: {exc}")
         claims = []
+
+    # Claim text by id — used to write a short Reflexion note (the WHY of a
+    # failure) that the researcher/synthesizer consume on the next loop pass so a
+    # retry is targeted, not blind.
+    claim_text_by_id = {cl.get("id"): str(cl.get("text") or "") for cl in claims}
 
     # Verdict per citation id, bounded to the first ~30 citations overall.
     verdicts: dict[int, bool] = {}
@@ -478,7 +526,7 @@ async def verifier(state: dict) -> dict:
                     support, support_score, quote = await _verify_support(
                         claim_text, source,
                         claim_vec=claim_vec, passages=passages, passage_vecs=pvecs,
-                        votes=votes,
+                        votes=votes, escalate_model=escalate_model,
                     )
                     if support:
                         emit("log", run_id, node="verifier",
@@ -525,8 +573,15 @@ async def verifier(state: dict) -> dict:
                 await asyncio.to_thread(repositories.set_claim_status, cl["id"], "unsupported")
             except Exception:
                 pass
-            notes.append({"claim_id": cl.get("id"), "issue": "all_citations_dead",
-                          "text": cl.get("text", "")[:200]})
+            notes.append({
+                "claim_id": cl.get("id"), "issue": "all_citations_dead",
+                "subtopic_id": cl.get("subtopic_id"),
+                "text": cl.get("text", "")[:200],
+                "reflection": (
+                    "All cited sources for this claim are dead links — re-synthesize "
+                    "this point using only the live, verifiable sources."
+                ),
+            })
 
     verifier_fatal = bool(fatal_bool and iteration < max_iters)
 
@@ -594,8 +649,15 @@ async def verifier(state: dict) -> dict:
         if not isinstance(sid, int) or sid in already_reresearched or sid in reresearch:
             continue
         reresearch.append(sid)
-        notes.append({"claim_id": claim_key, "issue": "sources_do_not_support",
-                      "subtopic_id": sid})
+        ctext = claim_text_by_id.get(claim_key, "")
+        notes.append({
+            "claim_id": claim_key, "issue": "sources_do_not_support",
+            "subtopic_id": sid, "text": ctext[:200],
+            "reflection": (
+                "The previously cited sources did NOT support this claim. Find "
+                f'sources that DIRECTLY confirm or refute: "{ctext[:140]}".'
+            ),
+        })
         if len(reresearch) >= _MAX_RERESEARCH:
             break
 

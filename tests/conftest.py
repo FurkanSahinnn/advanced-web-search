@@ -138,6 +138,12 @@ async def _fake_chat_json(role, messages, *, temperature=0.2, max_tokens=None, r
              "perspective": "gap follow-up"},
         ]}
 
+    # Gap dynamic outline revision: {"add":[{question,perspective}]} — return no
+    # new angles so the deterministic subtopic tree stays stable (the real
+    # parse/dedup path is still exercised).
+    if "OVERLOOKED" in text or "RESEARCH GOAL" in text:
+        return {"add": []}
+
     # Synthesizer claim extraction: array of {text, subtopic_id, citations:[{n,stance}]}
     if "extract the key factual claims" in text or "atomic factual claims" in text:
         return [

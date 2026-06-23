@@ -18,6 +18,7 @@ Public surface used by graph nodes:
 
 from __future__ import annotations
 
+import contextvars
 import json
 import re
 from typing import Any, AsyncIterator, Optional
@@ -26,6 +27,134 @@ from ..config import AGENT_ROLES, CLOUD_DEFAULTS, get_settings
 from ..models.schemas import LLMStatus, ModelMap
 from . import vault
 from .hardware import recommend_local_model
+
+
+# --------------------------------------------------------------------------- #
+# Per-run LLM cost / token accounting
+# --------------------------------------------------------------------------- #
+# `run_stream` installs a fresh accumulator before driving the graph; every
+# completion folds its token usage + $ estimate into it BY REFERENCE. Because
+# child tasks (the researcher/verifier fan-outs, every LangGraph node) copy this
+# context at creation, they all mutate the same dict — so the totals are complete
+# without threading run_id through every chat() call or changing any node
+# signature. Outside a tracked run (e.g. a Settings "Verify" probe) the var is
+# None and recording is a silent no-op. Best-effort throughout: usage/cost are
+# informational, so a provider that omits usage simply contributes 0.
+_COST_CTX: contextvars.ContextVar[Optional[dict]] = contextvars.ContextVar(
+    "aws_llm_cost", default=None
+)
+
+
+def begin_cost_capture() -> dict:
+    """Install + return a fresh per-run usage accumulator (caller keeps the ref)."""
+    acc: dict = {
+        "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0,
+        "cost_usd": 0.0, "calls": 0, "by_role": {},
+    }
+    _COST_CTX.set(acc)
+    return acc
+
+
+def current_cost() -> Optional[dict]:
+    """The active per-run usage accumulator, or None outside a tracked run."""
+    return _COST_CTX.get()
+
+
+def reset_cost_capture() -> None:
+    """Detach the accumulator so out-of-run completions don't record into it."""
+    _COST_CTX.set(None)
+
+
+def _record_usage(resp: Any, role: str) -> None:
+    """Best-effort: fold one completion's token usage + $ estimate into the run."""
+    acc = _COST_CTX.get()
+    if acc is None or resp is None:
+        return
+    try:
+        usage = getattr(resp, "usage", None)
+        if usage is None:
+            return
+        pt = int(getattr(usage, "prompt_tokens", 0) or 0)
+        ct = int(getattr(usage, "completion_tokens", 0) or 0)
+        tt = int(getattr(usage, "total_tokens", 0) or 0) or (pt + ct)
+    except Exception:
+        return
+    cost = 0.0
+    try:
+        import litellm
+
+        try:
+            cost = float(litellm.completion_cost(completion_response=resp) or 0.0)
+        except Exception:
+            cost = 0.0
+        if cost <= 0.0 and (pt or ct):
+            model = getattr(resp, "model", None) or ""
+            if model:
+                cost = _cost_per_token(model, pt, ct)
+    except Exception:
+        cost = 0.0
+    _accumulate(role, pt, ct, tt, cost)
+
+
+def _cost_per_token(model: str, pt: int, ct: int) -> float:
+    """Best-effort $ from token counts via litellm (0.0 on any failure)."""
+    try:
+        import litellm
+
+        prompt_cost, completion_cost = litellm.cost_per_token(
+            model=model, prompt_tokens=pt, completion_tokens=ct
+        )
+        return float(prompt_cost or 0.0) + float(completion_cost or 0.0)
+    except Exception:
+        return 0.0
+
+
+def _accumulate(role: str, pt: int, ct: int, tt: int, cost: float) -> None:
+    """Fold one completion's tokens + cost into the active accumulator."""
+    acc = _COST_CTX.get()
+    if acc is None:
+        return
+    try:
+        acc["prompt_tokens"] += pt
+        acc["completion_tokens"] += ct
+        acc["total_tokens"] += tt
+        acc["cost_usd"] += cost
+        acc["calls"] += 1
+        br = acc["by_role"].setdefault(role, {"tokens": 0, "cost_usd": 0.0, "calls": 0})
+        br["tokens"] += tt
+        br["cost_usd"] += cost
+        br["calls"] += 1
+    except Exception:
+        pass
+
+
+def _record_stream_estimate(model: str, messages: list[dict], output_text: str, role: str) -> None:
+    """Fallback usage for a stream whose provider sent no usage chunk.
+
+    The streamed report is the single biggest token sink, so when no usage chunk
+    arrives (some backends / the custom route, where `include_usage` is skipped)
+    we estimate tokens from the prompt + streamed output via litellm's tokenizer
+    so it isn't silently counted as 0. Fully best-effort; never raises.
+    """
+    if _COST_CTX.get() is None or not output_text:
+        return
+    try:
+        import litellm
+
+        real_model, _extra = _prepare(model)
+        try:
+            pt = int(litellm.token_counter(model=real_model, messages=messages) or 0)
+        except Exception:
+            pt = 0
+        try:
+            ct = int(litellm.token_counter(model=real_model, text=output_text) or 0)
+        except Exception:
+            ct = 0
+        if not (pt or ct):
+            return
+        _accumulate(role, pt, ct, pt + ct, _cost_per_token(real_model, pt, ct))
+    except Exception:
+        return
 
 
 # --------------------------------------------------------------------------- #
@@ -125,6 +254,40 @@ def resolve(role_or_model: str) -> str:
     return role_or_model
 
 
+def escalate(role: str) -> str:
+    """A STRONGER model id for ``role`` (for re-checking a contested claim).
+
+    The result is a raw litellm model id that callers pass straight into
+    ``chat``/``chat_json`` (``resolve`` is pass-through for raw ids), so no node
+    signature changes. Escalation is RAM-clamped for local models (only goes up a
+    tier that actually fits) and only swaps a cloud model when its key is present.
+    Returns the CURRENT model id unchanged when no stronger option exists (top
+    local tier / provider with no strong sibling) so callers can cheaply detect a
+    no-op. Never raises.
+    """
+    try:
+        current = resolve(role)
+    except Exception:
+        return role
+    try:
+        if _is_ollama(current):
+            from .hardware import next_local_tier
+
+            name = current.rsplit("/", 1)[-1]
+            stronger = next_local_tier(name, ram_clamped=True)
+            return current if stronger == name else f"ollama_chat/{stronger}"
+        prov = _provider_of(current)
+        if prov:
+            from ..config import CLOUD_STRONG
+
+            strong = CLOUD_STRONG.get(prov)
+            if strong and strong != current and vault.effective_cloud_key(prov):
+                return strong
+        return current
+    except Exception:
+        return current
+
+
 def _is_ollama(model: str) -> bool:
     return model.startswith("ollama")
 
@@ -192,6 +355,7 @@ async def chat(
         kw["response_format"] = {"type": "json_object"}
     try:
         resp = await _acompletion(model, messages, **kw)
+        _record_usage(resp, role)
         return resp.choices[0].message.content or ""
     except Exception:
         # One fallback to local if a cloud model failed — but ONLY when the user
@@ -203,6 +367,7 @@ async def chat(
         if model != local:
             try:
                 resp = await _acompletion(local, messages, **kw)
+                _record_usage(resp, role)  # the fallback is a 2nd billable call
                 return resp.choices[0].message.content or ""
             except Exception:
                 return ""
@@ -218,17 +383,34 @@ async def chat_stream(
 ) -> AsyncIterator[str]:
     model = resolve(role)
     kw: dict[str, Any] = {"temperature": temperature, "stream": True}
+    # include_usage asks the provider for a final usage-bearing chunk. Safe for
+    # cloud (honored) and ollama (litellm ignores/drops it), but a raw self-hosted
+    # OpenAI-compatible server may 400 on it — which would silently demote the live
+    # stream to the buffered chat() fallback. Skip it for the custom route; that
+    # path still gets usage from the token-count estimate below.
+    if not model.startswith("custom/"):
+        kw["stream_options"] = {"include_usage": True}
     if max_tokens:
         kw["max_tokens"] = max_tokens
     try:
         stream = await _acompletion(model, messages, **kw)
+        saw_usage = False
+        out_parts: list[str] = []
         async for chunk in stream:
+            if getattr(chunk, "usage", None) is not None:
+                _record_usage(chunk, role)  # final usage chunk (empty choices)
+                saw_usage = True
             try:
                 tok = chunk.choices[0].delta.content
             except Exception:
                 tok = None
             if tok:
+                out_parts.append(tok)
                 yield tok
+        # No usage chunk arrived (custom route / a provider that omits it):
+        # estimate from the prompt + streamed output so the report isn't 0.
+        if not saw_usage and out_parts:
+            _record_stream_estimate(model, messages, "".join(out_parts), role)
     except Exception:
         text = await chat(role, messages, temperature=temperature, max_tokens=max_tokens)
         if text:

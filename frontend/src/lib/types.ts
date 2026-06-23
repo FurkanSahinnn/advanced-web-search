@@ -173,6 +173,11 @@ export interface RunOut {
   error: string | null;
   started_at: string;
   finished_at: string | null;
+  // Accumulated LLM accounting for the run (0 for older rows / local Ollama).
+  tokens_in: number;
+  tokens_out: number;
+  cost_usd: number;
+  llm_calls: number;
 }
 
 export interface RunQueryOut {
@@ -385,6 +390,7 @@ export type EventType =
   | "report"
   | "report_grounding"
   | "report_quality"
+  | "run_cost"
   | "run_finished"
   | "error"
   | "log";

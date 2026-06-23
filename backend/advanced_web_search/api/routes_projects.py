@@ -256,6 +256,10 @@ def _run_out(row: dict) -> RunOut:
         error=row.get("error"),
         started_at=str(row.get("started_at") or ""),
         finished_at=row.get("finished_at"),
+        tokens_in=int(row.get("tokens_in") or 0),
+        tokens_out=int(row.get("tokens_out") or 0),
+        cost_usd=float(row.get("cost_usd") or 0.0),
+        llm_calls=int(row.get("llm_calls") or 0),
     )
 
 

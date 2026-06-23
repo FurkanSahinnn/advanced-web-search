@@ -29,7 +29,11 @@ from langgraph.types import Command
 from .. import config
 from ..config import DEFAULT_SCORE_WEIGHTS, get_settings
 from ..db import repositories
-from ..llm.provider import effective_model_map
+from ..llm.provider import (
+    begin_cost_capture,
+    effective_model_map,
+    reset_cost_capture,
+)
 from .builder import get_compiled_graph
 from .state import initial_state
 
@@ -56,6 +60,17 @@ def is_cancelled(run_id: int) -> bool:
         return bool(repositories.get_setting(_cancel_key(run_id)))
     except Exception:
         return False
+
+
+def _public_cost(acc: dict) -> dict:
+    """Shape a usage accumulator into the SSE `run_cost` payload (JSON-safe)."""
+    return {
+        "prompt_tokens": int(acc.get("prompt_tokens", 0) or 0),
+        "completion_tokens": int(acc.get("completion_tokens", 0) or 0),
+        "total_tokens": int(acc.get("total_tokens", 0) or 0),
+        "cost_usd": round(float(acc.get("cost_usd", 0.0) or 0.0), 6),
+        "calls": int(acc.get("calls", 0) or 0),
+    }
 
 
 def _build_tree(flat: list[dict]) -> list[dict]:
@@ -258,6 +273,12 @@ async def run_stream(run_id: int) -> AsyncIterator[dict]:
     # AWAITING (LLM / HTTP). CPU work already handed to a thread (rerank/embed)
     # can't be interrupted and finishes in the background — a bounded (seconds)
     # delay, versus the previously unbounded wait on a long LLM call.
+    # Install a fresh per-run LLM usage accumulator. Every completion driven by
+    # the graph below folds its tokens/cost into THIS dict by reference (the node
+    # tasks copy the current context at creation), so we can persist a run total
+    # afterward without threading run_id through every chat() call.
+    cost_acc = begin_cost_capture()
+
     cancel_event = asyncio.Event()
     _CANCEL_EVENTS[run_id] = cancel_event
     if await asyncio.to_thread(is_cancelled, run_id):
@@ -300,6 +321,13 @@ async def run_stream(run_id: int) -> AsyncIterator[dict]:
         raise
     except Exception as exc:
         await asyncio.to_thread(repositories.set_run_status, run_id, "error", str(exc))
+        # Persist whatever LLM cost was already spent before the crash (cost_acc
+        # survives — reset_cost_capture only detaches the contextvar). Best-effort.
+        try:
+            if isinstance(cost_acc, dict) and (cost_acc.get("calls") or 0) > 0:
+                await asyncio.to_thread(repositories.add_run_cost, run_id, cost_acc)
+        except Exception:
+            pass
         yield {"type": "error", "run_id": run_id, "data": {"message": str(exc)}}
         return
     finally:
@@ -324,6 +352,36 @@ async def run_stream(run_id: int) -> AsyncIterator[dict]:
         # newer one, leave it so cancel() can still reach the live stream.
         if _CANCEL_EVENTS.get(run_id) is cancel_event:
             _CANCEL_EVENTS.pop(run_id, None)
+        # Detach the accumulator so any out-of-run completion (e.g. a Settings
+        # probe) doesn't record into a finished run's totals.
+        reset_cost_capture()
+
+    # Persist + surface this pass's LLM token/cost. Additive, so a HITL run that
+    # streams twice accumulates the paused pass's planner/moderator cost too.
+    # Runs on every terminal path that actually streamed (done / cancelled /
+    # re-parked) since the tokens were genuinely spent. The emitted frame carries
+    # the CUMULATIVE run total (read back from the DB) so the live chip matches
+    # the durable RunOut.cost_usd even across a HITL pause/resume. Best-effort.
+    if isinstance(cost_acc, dict) and (cost_acc.get("calls") or 0) > 0:
+        total = cost_acc
+        try:
+            await asyncio.to_thread(repositories.add_run_cost, run_id, cost_acc)
+            row = await asyncio.to_thread(repositories.get_run, run_id)
+            if row:
+                ti = int(row.get("tokens_in") or 0)
+                to = int(row.get("tokens_out") or 0)
+                total = {
+                    "prompt_tokens": ti, "completion_tokens": to,
+                    "total_tokens": ti + to,
+                    "cost_usd": float(row.get("cost_usd") or 0.0),
+                    "calls": int(row.get("llm_calls") or 0),
+                }
+        except Exception:
+            total = cost_acc
+        yield {
+            "type": "run_cost", "run_id": run_id, "node": "finalizer",
+            "data": {"cost": _public_cost(total)},
+        }
 
     if cancelled:
         await asyncio.to_thread(repositories.set_run_status, run_id, "cancelled")

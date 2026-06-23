@@ -35,8 +35,18 @@ export interface RunStreamState {
   approvalTree: SubtopicOut[];
   activeNode: string | null;
   error: string | null;
+  /** Live LLM token/cost totals for the run (from the run_cost frame). */
+  cost: RunCost | null;
   /** Force a reconnect (e.g. after approve resumes the graph). */
   reopen: () => void;
+}
+
+export interface RunCost {
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  cost_usd: number;
+  calls: number;
 }
 
 // Insert / update a node inside a tree keyed by id (immutably-ish).
@@ -96,6 +106,7 @@ export function useRunStream(runId: number | null): RunStreamState {
   const [approvalTree, setApprovalTree] = useState<SubtopicOut[]>([]);
   const [activeNode, setActiveNode] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [cost, setCost] = useState<RunCost | null>(null);
   const [reopenKey, setReopenKey] = useState(0);
 
   const esRef = useRef<EventSource | null>(null);
@@ -249,6 +260,13 @@ export function useRunStream(runId: number | null): RunStreamState {
         }
         break;
       }
+      case "run_cost": {
+        // Accumulated LLM token/cost totals for the run (a HITL run emits one
+        // per stream pass; the latest carries the running total).
+        const c = ev.data?.cost as RunCost | undefined;
+        if (c) setCost(c);
+        break;
+      }
       case "run_finished": {
         const s = (ev.data?.status as string) ?? "finished";
         setStatus(
@@ -333,6 +351,7 @@ export function useRunStream(runId: number | null): RunStreamState {
     approvalTree,
     activeNode,
     error,
+    cost,
     reopen,
   };
 }
