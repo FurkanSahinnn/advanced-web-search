@@ -27,6 +27,7 @@ models_cache/
 
 # --- Private docs (kept local, not published) ---
 docs/
+CLAUDE.md
 
 # --- OS / editor / agent state ---
 .DS_Store
