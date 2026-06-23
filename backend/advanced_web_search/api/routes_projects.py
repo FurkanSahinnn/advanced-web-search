@@ -270,6 +270,16 @@ async def create_project_endpoint(body: ProjectCreate) -> dict:
 
     if body.depth:
         await asyncio.to_thread(repositories.set_setting, "depth", body.depth)
+        # The depth preset (chosen on Home) is now the SOLE control for these
+        # breadth/loop knobs — their Settings sliders were removed. Clear any stale
+        # saved overrides so an old value can't silently shadow the chosen preset
+        # (e.g. picking "quick" must actually mean 1 round / 4 subtopics, not a
+        # previously-saved 3 / 12).
+        for _k in (
+            "max_research_rounds", "gap_min_sources", "query_variants", "snowball_top_k",
+            "max_subtopics", "results_per_source",
+        ):
+            await asyncio.to_thread(repositories.delete_setting, _k)
     if body.weights is not None:
         await asyncio.to_thread(repositories.set_setting, "weights", body.weights.model_dump())
     if body.require_approval is not None:
