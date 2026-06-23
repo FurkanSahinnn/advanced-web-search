@@ -206,10 +206,14 @@ const tr: Dict = {
   "settings.weights": "Puanlama Ağırlıkları",
   "settings.weightsHint": "Toplam otomatik olarak 1'e normalize edilir.",
   "settings.requireApproval": "Plan onayı iste",
+  "settings.requireApproval.desc":
+    "Araştırma başlamadan önce planı (alt-soruları) durup onayına ve düzenlemene sunar.",
   "settings.useLocalLlm": "Yerel LLM (Ollama) kullan",
   "settings.useLocalLlmHint":
     "Yerel Ollama taranmaz/kullanılmaz; yalnızca bulut anahtarları kullanılır.",
   "settings.keepThreshold": "Tutma eşiği",
+  "settings.keepThreshold.desc":
+    "Bir kaynağın tutulması için gereken minimum final skor; altındakiler elenir (0–1).",
   "settings.maxSubtopics": "Maks. alt-soru",
   "settings.resultsPerSource": "Kaynak başına sonuç",
   "settings.comprehensiveness": "Arama derinliği / Kapsam",
@@ -322,6 +326,16 @@ const tr: Dict = {
   "weights.recency": "Güncellik",
   "weights.citation_impact": "Atıf etkisi",
   "weights.evidence": "Kanıt",
+  "weights.relevance.desc":
+    "Kaynağın soruyla ne kadar örtüştüğü (cross-encoder reranker skoru). En belirleyici sinyal.",
+  "weights.authority.desc":
+    "Kaynağın güvenilirliği — yayın yeri / alan adı itibarı, hakemli olup olmadığı.",
+  "weights.recency.desc":
+    "Kaynağın ne kadar güncel olduğu (zaman-azalımı); yeni çalışmalar daha yüksek puan alır.",
+  "weights.citation_impact.desc":
+    "Akademik etki — kaç kez atıf aldığı (logaritmik ölçek).",
+  "weights.evidence.desc":
+    "Kanıt türünün gücü (ör. RCT > hakemli > preprint) ve açık erişim tam-metin.",
 
   "common.loading": "Yükleniyor…",
   "common.error": "Bir hata oluştu",
@@ -370,6 +384,7 @@ const tr: Dict = {
     "Beş sinyal ağırlıklı olarak birleşip 0–100 arası bir eşleşme skoru üretir; eşik altı kaynaklar elenir.",
   "about.scoring.formula":
     "final = 0.40·İlgi + 0.15·Otorite + 0.15·Güncellik + 0.15·Atıf + 0.15·Kanıt (ağırlıklar Ayarlar'dan değiştirilebilir)",
+  "about.scoring.signalsTitle": "Sinyaller ne anlama geliyor?",
 
   "about.architecture.title": "Mimari",
   "about.architecture.caption":
@@ -638,10 +653,14 @@ const en: Dict = {
   "settings.weights": "Scoring Weights",
   "settings.weightsHint": "The total is automatically normalized to 1.",
   "settings.requireApproval": "Require plan approval",
+  "settings.requireApproval.desc":
+    "Pauses before research so you can review and edit the plan (sub-questions) first.",
   "settings.useLocalLlm": "Use local LLM (Ollama)",
   "settings.useLocalLlmHint":
     "Local Ollama is not probed or used; only cloud keys are used.",
   "settings.keepThreshold": "Keep threshold",
+  "settings.keepThreshold.desc":
+    "Minimum final score a source needs to be kept; anything lower is dropped (0–1).",
   "settings.maxSubtopics": "Max sub-questions",
   "settings.resultsPerSource": "Results per source",
   "settings.comprehensiveness": "Search depth / Comprehensiveness",
@@ -754,6 +773,16 @@ const en: Dict = {
   "weights.recency": "Recency",
   "weights.citation_impact": "Citation impact",
   "weights.evidence": "Evidence",
+  "weights.relevance.desc":
+    "How closely the source matches your question (cross-encoder reranker score). The dominant signal.",
+  "weights.authority.desc":
+    "Source credibility — venue / domain reputation and whether it's peer-reviewed.",
+  "weights.recency.desc":
+    "How recent the source is (time-decay); newer work scores higher.",
+  "weights.citation_impact.desc":
+    "Academic impact — how often it has been cited (logarithmic scale).",
+  "weights.evidence.desc":
+    "Strength of the evidence type (e.g. RCT > peer-reviewed > preprint) and open-access full text.",
 
   "common.loading": "Loading…",
   "common.error": "Something went wrong",
@@ -802,6 +831,7 @@ const en: Dict = {
     "Five signals combine, weighted, into a 0–100 match score; sources below the threshold are dropped.",
   "about.scoring.formula":
     "final = 0.40·Relevance + 0.15·Authority + 0.15·Recency + 0.15·Citation + 0.15·Evidence (weights are configurable in Settings)",
+  "about.scoring.signalsTitle": "What the signals mean",
 
   "about.architecture.title": "Architecture",
   "about.architecture.caption":

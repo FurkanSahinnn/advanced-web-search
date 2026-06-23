@@ -1,6 +1,8 @@
+import { HelpCircle } from "lucide-react";
 import type { ScoreWeights as Weights } from "../lib/types";
 import { useLang } from "../lib/i18n";
 import { Slider } from "./ui/slider";
+import { Tooltip } from "./ui/tooltip";
 import { cn } from "../lib/cn";
 
 const KEYS: (keyof Weights)[] = [
@@ -41,7 +43,15 @@ export function ScoreWeights({
         return (
           <div key={k}>
             <div className="mb-1 flex items-center justify-between text-xs">
-              <span className="text-[var(--color-fg)]">{t(`weights.${k}`)}</span>
+              <span className="flex items-center gap-1 text-[var(--color-fg)]">
+                {t(`weights.${k}`)}
+                <Tooltip wide label={t(`weights.${k}.desc`)}>
+                  <HelpCircle
+                    size={12}
+                    className="cursor-help text-[var(--color-faint)] hover:text-[var(--color-muted)]"
+                  />
+                </Tooltip>
+              </span>
               <span className="tabular-nums text-[var(--color-accent)]">
                 {pct}%
               </span>

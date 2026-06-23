@@ -118,7 +118,7 @@ const retrieval = (lang: Lang) =>
   W --> DD["Tekilleştirme (DOI / arXiv / URL)"]
   AC --> DD
   DD --> FT["OA tam-metin: Unpaywall → PDF → pypdf"]
-  FT --> EM["Yerel embedding: bge-m3"]
+  FT --> EM["Yerel embedding: multilingual-e5-large"]
   EM --> HY["Hibrit arama: vektör + BM25 → RRF"]
   HY --> RR["Reranker (cross-encoder)"]
   RR --> SC["5-sinyal skor"]
@@ -133,7 +133,7 @@ const retrieval = (lang: Lang) =>
   W --> DD["Deduplication (DOI / arXiv / URL)"]
   AC --> DD
   DD --> FT["OA full-text: Unpaywall → PDF → pypdf"]
-  FT --> EM["Local embedding: bge-m3"]
+  FT --> EM["Local embedding: multilingual-e5-large"]
   EM --> HY["Hybrid search: vector + BM25 → RRF"]
   HY --> RR["Reranker (cross-encoder)"]
   RR --> SC["5-signal score"]
@@ -168,7 +168,7 @@ const architecture = (lang: Lang) =>
     API["REST + SSE"]
     LG["LangGraph + SQLite checkpoint"]
     LLM["LiteLLM (bulut · yerel Ollama · kendi sunucun) — şifreli anahtar kasası"]
-    EMB["fastembed: bge-m3 + reranker"]
+    EMB["fastembed: multilingual-e5-large + reranker"]
     SRC["13 kaynak sağlayıcı"]
   end
   subgraph DATA["Tek dosya: SQLite"]
@@ -190,7 +190,7 @@ const architecture = (lang: Lang) =>
     API["REST + SSE"]
     LG["LangGraph + SQLite checkpoint"]
     LLM["LiteLLM (cloud · local Ollama · your own server) — encrypted key vault"]
-    EMB["fastembed: bge-m3 + reranker"]
+    EMB["fastembed: multilingual-e5-large + reranker"]
     SRC["13 source providers"]
   end
   subgraph DATA["Single file: SQLite"]
@@ -347,6 +347,53 @@ function AgentLegend({ lang }: { lang: Lang }) {
   );
 }
 
+/* ── What each scoring signal + research knob means (the "separate bar" under
+   the scoring diagram). Single source of truth: the same i18n descriptions are
+   reused by the Settings hover tooltips. */
+const SCORING_SIGNALS = [
+  "relevance",
+  "authority",
+  "recency",
+  "citation_impact",
+  "evidence",
+] as const;
+
+function ScoringLegend({ t }: { t: (k: string) => string }) {
+  return (
+    <div className="rounded-[var(--radius)] border border-[var(--color-border)] bg-[var(--color-surface-2)] p-3">
+      <p className="mb-2 text-xs font-semibold text-[var(--color-fg)]">
+        {t("about.scoring.signalsTitle")}
+      </p>
+      <ul className="space-y-2">
+        {SCORING_SIGNALS.map((k) => (
+          <li key={k} className="text-xs leading-snug">
+            <span className="font-medium text-[var(--color-fg)]">{t(`weights.${k}`)}</span>
+            <span className="text-[var(--color-muted)]"> — {t(`weights.${k}.desc`)}</span>
+          </li>
+        ))}
+        <li className="mt-1 border-t border-[var(--color-border)] pt-2 text-xs leading-snug">
+          <span className="font-medium text-[var(--color-fg)]">
+            {t("settings.keepThreshold")}
+          </span>
+          <span className="text-[var(--color-muted)]">
+            {" "}
+            — {t("settings.keepThreshold.desc")}
+          </span>
+        </li>
+        <li className="text-xs leading-snug">
+          <span className="font-medium text-[var(--color-fg)]">
+            {t("settings.requireApproval")}
+          </span>
+          <span className="text-[var(--color-muted)]">
+            {" "}
+            — {t("settings.requireApproval.desc")}
+          </span>
+        </li>
+      </ul>
+    </div>
+  );
+}
+
 type TabId =
   | "overview"
   | "agents"
@@ -457,9 +504,12 @@ export function About() {
             caption={t("about.scoring.caption")}
             chart={scoring(lang)}
             extra={
-              <p className="rounded-[var(--radius)] border border-[color-mix(in_srgb,var(--color-accent)_35%,transparent)] bg-[var(--color-accent-soft)] px-3 py-2 font-mono text-[11px] leading-relaxed text-[var(--color-accent)]">
-                {t("about.scoring.formula")}
-              </p>
+              <>
+                <p className="rounded-[var(--radius)] border border-[color-mix(in_srgb,var(--color-accent)_35%,transparent)] bg-[var(--color-accent-soft)] px-3 py-2 font-mono text-[11px] leading-relaxed text-[var(--color-accent)]">
+                  {t("about.scoring.formula")}
+                </p>
+                <ScoringLegend t={t} />
+              </>
             }
           />
         </TabsContent>

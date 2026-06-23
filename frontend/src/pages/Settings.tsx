@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Cpu, HardDrive, Save, CheckCircle2 } from "lucide-react";
+import { Cpu, HardDrive, Save, CheckCircle2, HelpCircle } from "lucide-react";
 import { api } from "../lib/api";
 import { useLang } from "../lib/i18n";
 import type {
@@ -21,6 +21,7 @@ import { Select } from "../components/ui/select";
 import { Slider } from "../components/ui/slider";
 import { Badge } from "../components/ui/badge";
 import { Spinner } from "../components/ui/spinner";
+import { Tooltip } from "../components/ui/tooltip";
 import { ScoreWeights } from "../components/ScoreWeights";
 import { ModelProviders } from "../components/ModelProviders";
 
@@ -293,7 +294,16 @@ export function Settings() {
           </CardHeader>
           <CardContent className="space-y-4">
             <label className="flex cursor-pointer items-center justify-between text-sm text-[var(--color-fg)]">
-              {t("settings.requireApproval")}
+              <span className="flex items-center gap-1">
+                {t("settings.requireApproval")}
+                <Tooltip wide label={t("settings.requireApproval.desc")}>
+                  <HelpCircle
+                    size={12}
+                    onClick={(e) => e.preventDefault()}
+                    className="cursor-help text-[var(--color-faint)] hover:text-[var(--color-muted)]"
+                  />
+                </Tooltip>
+              </span>
               <input
                 type="checkbox"
                 checked={requireApproval}
@@ -304,8 +314,14 @@ export function Settings() {
 
             <div>
               <div className="mb-1 flex items-center justify-between text-xs">
-                <span className="text-[var(--color-fg)]">
+                <span className="flex items-center gap-1 text-[var(--color-fg)]">
                   {t("settings.keepThreshold")}
+                  <Tooltip wide label={t("settings.keepThreshold.desc")}>
+                    <HelpCircle
+                      size={12}
+                      className="cursor-help text-[var(--color-faint)] hover:text-[var(--color-muted)]"
+                    />
+                  </Tooltip>
                 </span>
                 <span className="tabular-nums text-[var(--color-accent)]">
                   {keepThreshold.toFixed(2)}
