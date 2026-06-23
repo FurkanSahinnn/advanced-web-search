@@ -20,6 +20,9 @@ import {
   BadgeCheck,
   Route,
   Sparkles,
+  ClipboardCheck,
+  CircleDollarSign,
+  Brain,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useState } from "react";
@@ -69,8 +72,8 @@ const AGENT_CLASSDEFS = `
   classDef step fill:#0f1b2d,stroke:#3b82f6,color:#dbeafe;
   classDef gate fill:#1c1406,stroke:#f59e0b,color:#fde68a;
   class S,E io;
-  class P,M,R,G,SY agent;
-  class RK,V,F step;
+  class P,M,R,G,SY,V agent;
+  class RK,F step;
   class A,GD,VD gate;`;
 
 const agents = (lang: Lang) =>
@@ -81,13 +84,14 @@ const agents = (lang: Lang) =>
   M --> A{"👤 Onay Kapısı"}
   A -->|"kullanıcı düzenler / onaylar"| R["📚 Researcher — paralel fan-out + sorgu genişletme"]
   R --> RK["⚖️ Ranker — çok-sinyalli skor + filtre"]
-  RK --> G["🕳️ Gap Analizi — eksik açıları arar"]
-  G --> GD{"eksik kaldı mı?"}
-  GD -->|"evet → yeni tur"| R
-  GD -->|"hayır"| SY["✍️ Synthesizer — atıflı raporu yazar (akışlı, çoklu-dil paralel)"]
-  SY --> V["🛡️ Verifier — atıf bağlantılarını doğrular"]
-  V --> VD{"kanıt yeterli mi?"}
-  VD -->|"kanıtsız iddia"| SY
+  RK --> G["🕳️ Gap Analizi — yeterlilik (CRAG) + eksik açılar"]
+  G --> GD{"kapsam yeterli mi?"}
+  GD -->|"zayıf → yeni tur"| R
+  GD -->|"yeterli"| SY["✍️ Synthesizer — atıflı raporu yazar (akışlı, çoklu-dil paralel)"]
+  SY --> V["🛡️ Verifier — bağlantı canlılığı + iddia↔kaynak doğrulama"]
+  V --> VD{"kanıt durumu?"}
+  VD -->|"ölü bağlantı → yeniden yaz"| SY
+  VD -->|"kaynak desteklemiyor → yeniden araştır"| R
   VD -->|"temiz"| F["✅ Finalizer — paketler + dışa aktarır"]
   F --> E(["Atıflı Rapor"])
 ${AGENT_CLASSDEFS}`
@@ -97,13 +101,14 @@ ${AGENT_CLASSDEFS}`
   M --> A{"👤 Approval Gate"}
   A -->|"user edits / approves"| R["📚 Researcher — parallel fan-out + query expansion"]
   R --> RK["⚖️ Ranker — multi-signal score + filter"]
-  RK --> G["🕳️ Gap Analysis — looks for missing angles"]
-  G --> GD{"anything missing?"}
-  GD -->|"yes → new round"| R
-  GD -->|"no"| SY["✍️ Synthesizer — writes the cited report (streaming, multi-language parallel)"]
-  SY --> V["🛡️ Verifier — re-checks citation links"]
-  V --> VD{"evidence sufficient?"}
-  VD -->|"unsupported claim"| SY
+  RK --> G["🕳️ Gap Analysis — sufficiency (CRAG) + missing angles"]
+  G --> GD{"coverage sufficient?"}
+  GD -->|"weak → new round"| R
+  GD -->|"sufficient"| SY["✍️ Synthesizer — writes the cited report (streaming, multi-language parallel)"]
+  SY --> V["🛡️ Verifier — link liveness + claim↔source entailment"]
+  V --> VD{"evidence verdict?"}
+  VD -->|"dead links → rewrite"| SY
+  VD -->|"sources don't support → re-research"| R
   VD -->|"clean"| F["✅ Finalizer — packages + exports"]
   F --> E(["Cited Report"])
 ${AGENT_CLASSDEFS}`;
@@ -216,6 +221,11 @@ const FEATURES: Feature[] = [
   { icon: Languages, titleKey: "about.feat.multilang.title", descKey: "about.feat.multilang.desc" },
   { icon: Eye, titleKey: "about.feat.transparent.title", descKey: "about.feat.transparent.desc" },
   { icon: BadgeCheck, titleKey: "about.feat.verify.title", descKey: "about.feat.verify.desc" },
+  { icon: ClipboardCheck, titleKey: "about.feat.quality.title", descKey: "about.feat.quality.desc" },
+  { icon: Lightbulb, titleKey: "about.feat.crag.title", descKey: "about.feat.crag.desc" },
+  { icon: Layers, titleKey: "about.feat.context.title", descKey: "about.feat.context.desc" },
+  { icon: Brain, titleKey: "about.feat.selfimprove.title", descKey: "about.feat.selfimprove.desc" },
+  { icon: CircleDollarSign, titleKey: "about.feat.cost.title", descKey: "about.feat.cost.desc" },
   { icon: Scale, titleKey: "about.feat.disagreement.title", descKey: "about.feat.disagreement.desc" },
   { icon: Globe, titleKey: "about.feat.diversity.title", descKey: "about.feat.diversity.desc" },
   { icon: Route, titleKey: "about.feat.trail.title", descKey: "about.feat.trail.desc" },
@@ -270,12 +280,12 @@ const AGENT_LEGEND: Record<Lang, { kind: SwatchKind; title: string; desc: string
     {
       kind: "agent",
       title: "AI Ajanı",
-      desc: "LLM ile muhakeme eden adım — Planner · Moderator · Researcher · Gap Analizi · Synthesizer",
+      desc: "LLM ile muhakeme eden adım — Planner · Moderator · Researcher · Gap Analizi · Synthesizer · Verifier (iddia↔kaynak çıkarımı)",
     },
     {
       kind: "step",
       title: "Deterministik adım",
-      desc: "LLM kullanmaz; kural/ML ile çalışır — Ranker · Verifier · Finalizer",
+      desc: "LLM kullanmaz; kural/ML ile çalışır — Ranker · Finalizer",
     },
     {
       kind: "gate",
@@ -288,12 +298,12 @@ const AGENT_LEGEND: Record<Lang, { kind: SwatchKind; title: string; desc: string
     {
       kind: "agent",
       title: "AI Agent",
-      desc: "A step that reasons with an LLM — Planner · Moderator · Researcher · Gap Analysis · Synthesizer",
+      desc: "A step that reasons with an LLM — Planner · Moderator · Researcher · Gap Analysis · Synthesizer · Verifier (claim↔source entailment)",
     },
     {
       kind: "step",
       title: "Deterministic step",
-      desc: "No LLM; rule/ML based — Ranker · Verifier · Finalizer",
+      desc: "No LLM; rule/ML based — Ranker · Finalizer",
     },
     {
       kind: "gate",

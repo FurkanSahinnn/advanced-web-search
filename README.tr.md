@@ -67,6 +67,10 @@ atıflarını nadiren yeniden denetler ve hiçbirini sizin makinenizde tutmaz.
 | **Yönlendirilebilir** | İnsan-döngüde **onay kapısı**, pahalı arama başlamadan *önce* iç içe alt-konu planını düzenlemenize izin verir. |
 | **Kendini denetleyen** | **Çelişkili (adversarial) doğrulayıcı**, her satır-içi atfı kaynağın *gerçek metniyle* karşılaştırır (embedding ön-elemesi + LLM entailment) ve *destekleniyor / kısmen / desteklenmiyor / doğrulanamaz* olarak etiketler — bağlantı canlılığından ayrı tutulur — desteksiz iddialar revizyona geri gönderilir. |
 | **Çelişkiye duyarlı & izlenebilir** | Rapor, kaynakların yalnızca uzlaştığı değil **çeliştiği** yerleri de gösterir; kanıt tek bir **alan adında** yoğunlaşınca (eko-oda) uyarır; ve atılan her sorgunun, tutulan/elenen her kaynağın tam bir **araştırma izini** sunar. |
+| **Uyarlanır & öz-değerlendiren** | Kapsam, **reranker güveniyle (CRAG)** notlanır — zayıf alt-sorulara hedefli bir ek tur açılır, iyi kapsananlarda döngü bütçeyi harcamadan erken biter; her rapor referanssız bir **kalite skorkartı** taşır (temellendirme, atıf hassasiyeti/kapsamı, yanıt-ilgisi, kaynak çeşitliliği). |
+| **Öğrenen yeniden denemeler** | Desteksiz bir iddia kısa bir **reflexion** notu bırakır ve bu not *hedefli* bir yeniden aramayı yönlendirir; çekişmeli bir karar **daha güçlü bir modelle** yeniden denetlenir — körlemesine değil, öğrenen yeniden denemeler. Getirimde ayrıca **bağlamsal** parça ön-ekleri + çoklu-sorgu (paraphrase / step-back) genişletme kullanılır. |
+| **Maliyet şeffaf** | Koşu başına **token + maliyet** kullanımı izlenir ve ajan izinde canlı gösterilir — yerel Ollama'da ücretsiz, bulut anahtarında tahmini $. |
+| **Rapora sor** | Koşudan sonra, **yalnızca** o koşunun kaynaklarından yanıtlanan (atıflı, yoksa dürüstçe "bulunamadı") takip soruları sorabilirsin. |
 | **Çok dilli** | Güçlü **Türkçe** desteğiyle yerel `multilingual-e5-large` embedding'leri; iki dilli TR/EN arayüz; raporlar **bir veya birden çok dilde paralel** üretilebilir. |
 | **Kalıcı** | Projeler, çalıştırmalar, kaynaklar, iddialar ve raporlar SQLite'ta saklanır ve tekrar açılabilir — bir sorgudan sonra hiçbir şey atılmaz. |
 | **Tek komut, Windows-öncelikli** | `./start.ps1` (veya `./start.sh`) kurar, derler ve başlatır. curl-pipe-bash yok, sihirbaz yok. |
@@ -151,11 +155,12 @@ flowchart TD
   M --> A{"👤 Onay kapısı (insan-döngüde)"}
   A -->|"kullanıcı düzenler / onaylar"| R["📚 Researcher — paralel fan-out + sorgu genişletme"]
   R --> RK["⚖️ Ranker — çok-sinyalli puan + filtre"]
-  RK --> G{"🕳️ Eksik analizi — eksik var mı?"}
-  G -->|"evet → yeni tur"| R
-  G -->|"hayır"| SY["✍️ Synthesizer — atıflı rapor (akışlı, çoklu-dil paralel)"]
-  SY --> V{"🛡️ Verifier — her atıfı yeniden denetler"}
-  V -->|"desteksiz iddia"| SY
+  RK --> G{"🕳️ Eksik analizi — kapsam yeterli mi? (CRAG)"}
+  G -->|"zayıf → yeni tur"| R
+  G -->|"yeterli"| SY["✍️ Synthesizer — atıflı rapor (akışlı, çoklu-dil paralel)"]
+  SY --> V{"🛡️ Verifier — bağlantı canlılığı + iddia↔kaynak çıkarımı"}
+  V -->|"ölü bağlantı → yeniden yaz"| SY
+  V -->|"kaynak desteklemiyor → yeniden araştır"| R
   V -->|"temiz"| F["✅ Finalizer — paketler + dışa aktarır"]
   F --> E(["Atıflı rapor"])
 ```

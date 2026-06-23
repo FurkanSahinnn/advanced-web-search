@@ -426,6 +426,21 @@ const tr: Dict = {
   "about.feat.verify.title": "Atıf doğrulama",
   "about.feat.verify.desc":
     "Her [n] atfı, kaynağın gerçek metniyle karşılaştırılır (embedding + LLM): destekleniyor / kısmen / desteklenmiyor / doğrulanamaz. Desteklenmeyen iddialar yeniden araştırmaya yönlendirilir; kesinlik puanı kaynakların iddiayı gerçekten desteklediği orana göre hesaplanır.",
+  "about.feat.quality.title": "Kalite skorkartı",
+  "about.feat.quality.desc":
+    "Referanssız bir öz-değerlendirme: temellendirme, atıf hassasiyeti/kapsamı, yanıt-ilgisi ve kaynak çeşitliliği + genel skor — raporun yanında bir bakışta gösterilir.",
+  "about.feat.crag.title": "Uyarlanır derinlik (CRAG)",
+  "about.feat.crag.desc":
+    "Her alt-soru, reranker güveniyle 'yeterli / belirsiz / zayıf' olarak notlanır (kaynak SAYISI yerine). Zayıf olanlara hedefli bir ek tur açılır; her şey yeterliyse tur bütçesi boşa harcanmadan döngü erken biter.",
+  "about.feat.context.title": "Bağlamsal getirim",
+  "about.feat.context.desc":
+    "Her metin parçası, gömme + tam-metin indeksleme öncesi tek cümlelik kaynak bağlamıyla zenginleştirilir; böylece belgenin bağlamını yitiren bir parça bile eşleşir. Ham parça gösterim için ayrıca saklanır.",
+  "about.feat.selfimprove.title": "Kendini iyileştiren",
+  "about.feat.selfimprove.desc":
+    "Self-refine (taslağı eleştirip düzeltir), reflexion ('neden desteklenmedi' notu → hedefli yeniden deneme) ve çekişmeli iddialarda daha güçlü bir modele yükseltme.",
+  "about.feat.cost.title": "Maliyet & token şeffaflığı",
+  "about.feat.cost.desc":
+    "Koşu başına token ve maliyet izlenir ve ajan izinde gösterilir (yerel Ollama ile ücretsiz; bulut anahtarında tahmini $).",
   "about.feat.disagreement.title": "Anlaşmazlık tespiti",
   "about.feat.disagreement.desc":
     "Rapor, kaynakların çeliştiği veya belirsiz kaldığı noktaları ayrı bir bölümde açıkça gösterir.",
@@ -892,6 +907,21 @@ const en: Dict = {
   "about.feat.verify.title": "Citation verification",
   "about.feat.verify.desc":
     "Every [n] citation is checked against the source's actual text (embedding + LLM): supported / partial / unsupported / unverifiable. Unsupported claims are routed back for re-research, and the certainty score is the share of claims their sources actually back.",
+  "about.feat.quality.title": "Quality scorecard",
+  "about.feat.quality.desc":
+    "A reference-free self-assessment — groundedness, citation precision/coverage, answer relevance and source diversity plus an overall score — shown at a glance beside the report.",
+  "about.feat.crag.title": "Adaptive depth (CRAG)",
+  "about.feat.crag.desc":
+    "Each sub-question is graded sufficient / ambiguous / weak by reranker confidence (not raw source COUNT). Weak ones get a targeted extra round; when coverage is already strong the loop exits early instead of burning the round budget.",
+  "about.feat.context.title": "Contextual retrieval",
+  "about.feat.context.desc":
+    "Each chunk is enriched with a one-sentence source context before embedding + full-text indexing, so a chunk that lost its document context still matches. The raw chunk is kept separately for display.",
+  "about.feat.selfimprove.title": "Self-improving",
+  "about.feat.selfimprove.desc":
+    "Self-refine (critique-then-revise the draft), reflexion (a 'why unsupported' note that steers a targeted retry), and escalation of contested claims to a stronger model.",
+  "about.feat.cost.title": "Cost & token transparency",
+  "about.feat.cost.desc":
+    "Per-run tokens and cost are tracked and shown in the agent trace (free on local Ollama; an estimated $ with a cloud key).",
   "about.feat.disagreement.title": "Disagreement detection",
   "about.feat.disagreement.desc":
     "The report explicitly surfaces where sources conflict or remain uncertain, in a dedicated section.",

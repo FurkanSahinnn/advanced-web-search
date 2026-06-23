@@ -65,6 +65,10 @@ re-check their own citations, and keep none of it on your machine.
 | **Steerable** | A human-in-the-loop **approval gate** lets you edit the nested sub-topic plan *before* expensive retrieval runs. |
 | **Self-checking** | An **adversarial verifier** checks each inline citation against the source's *actual text* (embedding prefilter + LLM entailment) and labels it *supported / partial / unsupported / unverifiable* — kept separate from link-liveness — sending unsupported claims back for revision. |
 | **Conflict-aware & traceable** | The report surfaces where sources **disagree** (not only where they agree), warns when evidence concentrates in a single **domain** (echo-chamber), and exposes a full **research trail** of every query issued and every source kept or dropped. |
+| **Adaptive & self-assessing** | Coverage is graded by **reranker confidence (CRAG)** — weak sub-questions get a targeted extra round while well-covered ones exit early instead of burning the budget; every report carries a reference-free **quality scorecard** (groundedness, citation precision/coverage, answer relevance, source diversity). |
+| **Learning retries** | An unsupported claim leaves a short **reflexion** note that steers a *targeted* re-search, and a contested verdict is re-checked by a **stronger model** — retries that learn, not blind repeats. Retrieval also uses **contextual** chunk prefixes + multi-query (paraphrase / step-back) expansion. |
+| **Cost-transparent** | Per-run **token + cost** usage is tracked and shown live in the agent trace — free on local Ollama, an estimated $ with a cloud key. |
+| **Ask the report** | After a run, ask follow-up questions answered **only** from that run's own sources, with inline citations (or an honest "not found"). |
 | **Multilingual** | Local `multilingual-e5-large` embeddings with strong **Turkish** support; bilingual TR/EN UI; reports can be generated in **one or several languages in parallel**. |
 | **Persistent** | Projects, runs, sources, claims and reports are saved in SQLite and revisitable — nothing is thrown away after a query. |
 | **One command, Windows-first** | `./start.ps1` (or `./start.sh`) installs, builds and launches. No curl-pipe-bash, no wizard. |
@@ -149,11 +153,12 @@ flowchart TD
   M --> A{"👤 Approval gate (human-in-the-loop)"}
   A -->|"user edits / approves"| R["📚 Researcher — parallel fan-out + query expansion"]
   R --> RK["⚖️ Ranker — multi-signal score + filter"]
-  RK --> G{"🕳️ Gap analysis — anything missing?"}
-  G -->|"yes → new round"| R
-  G -->|"no"| SY["✍️ Synthesizer — cited report (streaming, multi-language parallel)"]
-  SY --> V{"🛡️ Verifier — re-check every citation"}
-  V -->|"unsupported claim"| SY
+  RK --> G{"🕳️ Gap analysis — coverage sufficient? (CRAG)"}
+  G -->|"weak → new round"| R
+  G -->|"sufficient"| SY["✍️ Synthesizer — cited report (streaming, multi-language parallel)"]
+  SY --> V{"🛡️ Verifier — link liveness + claim↔source entailment"}
+  V -->|"dead links → rewrite"| SY
+  V -->|"sources don't support → re-research"| R
   V -->|"clean"| F["✅ Finalizer — package + export"]
   F --> E(["Cited report"])
 ```
