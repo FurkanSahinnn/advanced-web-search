@@ -395,12 +395,26 @@ async def run_stream(run_id: int) -> AsyncIterator[dict]:
         return
 
     # After the loop: if still parked at the approval interrupt, mark the run.
+    parked = False
     try:
         snap2 = await graph.aget_state(cfg)
         if snap2.next:
+            parked = True
             await asyncio.to_thread(repositories.set_run_status, run_id, "awaiting_approval")
     except Exception:
         pass
+
+    # Run fully completed (not paused for approval): reclaim the WAL the LangGraph
+    # checkpointer grew across the run. The graph generator is finalized
+    # (iterator.aclose() in the finally above), so truncating the shared WAL now is
+    # safe and stops lumina.db's WAL from staying at its deep-run high-water mark on
+    # disk. A later cancelled/errored run's WAL is reclaimed by the next completed
+    # run's truncate (the WAL is shared). Best-effort; never blocks the response.
+    if not parked:
+        try:
+            await asyncio.to_thread(repositories.checkpoint_wal)
+        except Exception:
+            pass
 
 
 async def approve(run_id: int, decision: dict) -> None:

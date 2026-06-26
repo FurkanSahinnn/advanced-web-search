@@ -42,6 +42,19 @@ _FULLTEXT_MIN_LEN = 400  # candidates with shorter full_text are eligible for en
 # context LLM call per subtopic; the rest fall back to a free metadata prefix.
 _MAX_CONTEXTUALIZE = 20
 
+# State-only body cap. `full_text` (6-8 KB) and `raw` (the full provider JSON,
+# often tens of KB) are only needed for DB persistence + vector indexing — both
+# consume the FAT candidate dict BEFORE it enters graph state. The `candidates`
+# reducer is additive (operator.add, never pruned) AND every super-step msgpack-
+# checkpoints the whole state to the WAL, so leaving the bodies on the dicts
+# bloats both peak RAM and the WAL. Downstream STATE readers only need metadata
+# plus a short body slice: the ranker reranks over title+abstract+full_text[:800]
+# (scoring.ranker._RERANK_BODY_CHARS), the synthesizer/gap read only metadata,
+# and the verifier re-reads the FULL body from the DB (not state). So before a
+# dict joins `candidates` we drop `raw` and clip `full_text` to this cap (kept
+# > 800 so the ranker still sees its whole body slice). See _thin_for_state.
+_STATE_FULLTEXT_CHARS = 1000
+
 
 def _leaves(approved: list[dict]) -> list[dict]:
     """Approved subtopics that are not a parent of another approved subtopic."""
@@ -442,7 +455,9 @@ async def researcher(state: dict) -> dict:
         if isinstance(sid_topic, int):
             researched_ids.append(sid_topic)
 
-        return collected
+        # Persist + indexing above already consumed the fat dicts (full_text/raw);
+        # only thin metadata copies enter the additive `candidates` state + WAL.
+        return [_thin_for_state(d) for d in collected]
 
     all_dicts: list[dict] = []
     errors: list[str] = []
@@ -559,6 +574,24 @@ async def _enrich_academic_fulltext(cands: list, run_id: int | None = None) -> N
         pass
 
 
+def _thin_for_state(d: dict) -> dict:
+    """Return a copy of a candidate dict safe to put in the additive graph state.
+
+    Strips the heavy fields the persist + indexing steps already consumed off the
+    FAT dict: drops ``raw`` entirely (never read from state downstream — only from
+    DB rows) and clips ``full_text`` to ``_STATE_FULLTEXT_CHARS`` (the ranker only
+    reranks over its leading ``_RERANK_BODY_CHARS`` slice). ``abstract`` + all
+    metadata are kept. Shallow copy, so the original (already indexed) dict is
+    untouched.
+    """
+    out = dict(d)
+    out.pop("raw", None)
+    ft = out.get("full_text")
+    if isinstance(ft, str) and len(ft) > _STATE_FULLTEXT_CHARS:
+        out["full_text"] = ft[:_STATE_FULLTEXT_CHARS]
+    return out
+
+
 async def _persist_candidates(run_id: int, cands: list, subtopic_id) -> list[dict]:
     """Upsert + stream + collect candidate dicts for indexing."""
     collected: list[dict] = []
@@ -638,4 +671,5 @@ async def _snowball(run_id: int, seed_ids: list[int], subtopics: list[dict]):
         emit("log", run_id, node="researcher",
              message=f"Snowball: {len(collected)} atıf kaynağı eklendi.",
              count=len(collected))
-    return collected, errors
+    # Indexing above consumed the fat dicts; thin copies enter state (see researcher()).
+    return [_thin_for_state(d) for d in collected], errors

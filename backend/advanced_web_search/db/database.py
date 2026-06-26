@@ -353,6 +353,17 @@ def init_db() -> "_SerializedConnection":
         conn.execute("PRAGMA foreign_keys=ON;")
         conn.execute("PRAGMA busy_timeout=8000;")
         conn.execute("PRAGMA synchronous=NORMAL;")
+        # Bound the WAL file's on-disk growth. The LangGraph checkpointer
+        # re-serializes the whole (additively accumulating) ResearchState to this
+        # shared WAL on every super-step, so across a deep run the WAL balloons —
+        # and a *passive* auto-checkpoint only resets the WAL's write position, it
+        # never shrinks the file. Setting the auto-checkpoint cadence explicitly
+        # (the default 1000 pages, re-asserted) plus a size limit makes a checkpoint
+        # truncate the WAL back down instead of leaving it at its high-water mark.
+        # The runner also issues a final wal_checkpoint(TRUNCATE) when a run ends
+        # (see repositories.checkpoint_wal), which reclaims it fully.
+        conn.execute("PRAGMA wal_autocheckpoint=1000;")
+        conn.execute("PRAGMA journal_size_limit=67108864;")  # cap WAL at 64 MB after checkpoint
 
         _vec_available = _load_sqlite_vec(conn)
 

@@ -124,6 +124,25 @@ def add_run_cost(run_id: int, cost: dict) -> None:
         )
 
 
+def checkpoint_wal() -> None:
+    """Checkpoint + TRUNCATE the shared WAL to reclaim disk after a run.
+
+    The LangGraph checkpointer re-serializes the whole accumulating ResearchState
+    to ``lumina.db``'s WAL on every super-step and never truncates it, so a deep
+    run leaves a large WAL on disk. A passive auto-checkpoint only resets the
+    WAL's write position; ``wal_checkpoint(TRUNCATE)`` shrinks the file itself.
+    Runs through the serialized proxy (so no other statement interleaves) and
+    OUTSIDE a transaction (a checkpoint cannot run inside ``BEGIN IMMEDIATE``).
+    Best-effort housekeeping: if a concurrent reader blocks a full truncate
+    SQLite reclaims what it can and the next checkpoint finishes the rest — never
+    fatal, never raises.
+    """
+    try:
+        get_conn().execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    except Exception:
+        pass
+
+
 # --------------------------------------------------------------------------- #
 # Subtopics
 # --------------------------------------------------------------------------- #
