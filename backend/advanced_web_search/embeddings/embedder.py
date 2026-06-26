@@ -189,6 +189,17 @@ async def aembed_query(text: str) -> list[float]:
     return await asyncio.to_thread(embed_query, text)
 
 
+def is_loaded() -> bool:
+    """Whether an embedding model is already resident (peek; never triggers a load).
+
+    Lets callers (graph nodes) warn the UI before a first-use load that may
+    download weights from HuggingFace (~2.3 GB) — without forcing the load
+    themselves. ``False`` means the next embed call will load (and possibly
+    download) the model. See ``graph.events.model_load_pending``.
+    """
+    return _model is not None
+
+
 def warm_up() -> bool:
     """Trigger model download/load ahead of first run. Returns True on success."""
     try:

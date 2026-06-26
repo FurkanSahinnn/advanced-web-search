@@ -31,7 +31,7 @@ from ...retrieval.dedup import dedup_candidates
 from ...sources import fulltext, registry
 from ...utils.http import fetch_text
 from ...utils.text import detect_language, extract_main_text, truncate
-from ..events import emit
+from ..events import emit, model_load_pending
 
 _FULLTEXT_WEB_LIMIT = 6
 _FULLTEXT_CHARS = 6000
@@ -280,6 +280,20 @@ async def researcher(state: dict) -> dict:
 
     researched_ids: list[int] = []
 
+    # One-shot guards so the "loading model (first use, may download)" notice is
+    # emitted ONCE per run, not once per concurrent subtopic. The check + set is
+    # synchronous (no await between), so it's atomic across the gather's
+    # coroutines. Shared via closure with research_one below.
+    notice_sent = {"rerank": False, "embed": False}
+
+    def _notify_model_load(kind: str) -> None:
+        if notice_sent.get(kind):
+            return
+        msg = model_load_pending(kind)
+        if msg:
+            notice_sent[kind] = True
+            emit("log", run_id, node="researcher", message=msg)
+
     async def research_one(st: dict) -> list[dict]:
         sid_topic = st.get("id")
         q = str(st.get("question") or "").strip()
@@ -376,6 +390,7 @@ async def researcher(state: dict) -> dict:
         # cap would actually drop something; identity-mode rerank preserves order,
         # so this degrades to today's behaviour when no real model is loaded.
         if len(cands) > max_sources:
+            _notify_model_load("rerank")
             try:
                 docs = [
                     f"{getattr(c, 'title', '') or ''}. "
@@ -442,6 +457,8 @@ async def researcher(state: dict) -> dict:
             except Exception:
                 contexts = None
 
+        if collected:
+            _notify_model_load("embed")
         try:
             await vector_store.index_sources(run_id, collected, contexts)
         except Exception:

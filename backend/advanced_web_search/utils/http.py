@@ -185,12 +185,18 @@ async def fetch_bytes(
     headers: Optional[dict] = None,
     retries: int = 2,
     max_bytes: int = 8_000_000,
+    total_timeout: float = 60.0,
 ) -> Optional[bytes]:
     """GET raw binary content (e.g. a PDF), capped at ``max_bytes``.
 
     Streams the response so we stop reading once the cap is exceeded, mirroring
     the shared client/semaphore usage of the other fetchers. Returns None on
     any failure (network, status, oversize). Never raises.
+
+    ``total_timeout`` is a WALL-CLOCK cap on the streaming read: httpx's 25s is a
+    per-read (per-chunk) timeout, so a slow-drip server emitting a trickle just
+    inside each window can hold the connection open far longer. We abort once the
+    total elapsed download time exceeds ``total_timeout`` (slowloris guard).
     """
     if not is_safe_url(url):
         return None
@@ -202,9 +208,12 @@ async def fetch_bytes(
                 async with client.stream("GET", url, headers=headers) as resp:
                     resp.raise_for_status()
                     buf = bytearray()
+                    start = time.monotonic()
                     async for chunk in resp.aiter_bytes():
                         buf.extend(chunk)
                         if len(buf) > max_bytes:
+                            return None
+                        if time.monotonic() - start > total_timeout:
                             return None
                     return bytes(buf)
         except Exception:

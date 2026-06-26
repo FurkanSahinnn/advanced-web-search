@@ -14,7 +14,7 @@ from typing import Any
 from ...db import repositories
 from ...embeddings import reranker
 from ...scoring.ranker import score_sources
-from ..events import emit
+from ..events import emit, model_load_pending
 
 
 def _dedup_by_id(cands: list[dict]) -> list[dict]:
@@ -75,6 +75,15 @@ async def ranker(state: dict) -> dict:
     # identity/degraded mode (no absolute signal) — the gap node then falls back
     # to the source-count proxy.
     rerank_confidence: dict[str, float] = {}
+
+    # If the researcher skipped reranking (every subtopic had <= max_sources
+    # candidates), the cross-encoder first loads HERE — warn the UI before the
+    # first-use load/download so the run doesn't look frozen. One-shot: a single
+    # peek before the sequential scoring loop (no-op once the model is resident).
+    if groups:
+        _msg = model_load_pending("rerank")
+        if _msg:
+            emit("log", run_id, node="ranker", message=_msg)
 
     for subtopic_id, group in groups.items():
         query = question_of.get(subtopic_id, "")

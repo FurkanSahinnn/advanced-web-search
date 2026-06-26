@@ -8,6 +8,7 @@ retrieval/dedup.py (canonicalize + merge happens downstream).
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import date
 from typing import Optional
 
@@ -28,6 +29,19 @@ from .web_tavily import TavilyProvider
 
 # Providers whose search() is a known no-op (enrichers); excluded from discovery.
 _NO_DISCOVERY = {"unpaywall"}
+
+log = logging.getLogger("advanced_web_search.sources.registry")
+
+# Hard per-provider deadline for the search fan-out. A provider that never
+# returns (e.g. DuckDuckGo's ddgs running in a NON-cancellable asyncio.to_thread
+# that blocks on a wedged engine / shutdown(wait=True)) must not stall the whole
+# gather — and thus the researcher node and the entire run. 30s is generous for
+# the bounded utils/http.py providers (which finish in seconds; only a
+# pathological retry-storm approaches it) while still capping a true hang.
+# wait_for frees the awaiting coroutine on timeout; a to_thread worker it spawned
+# keeps running in the background until it unwinds (threads aren't cancellable) —
+# acceptable: the run proceeds with the other providers' results.
+_PROVIDER_TIMEOUT = 30.0
 
 
 def all_providers() -> list[SourceProvider]:
@@ -86,6 +100,7 @@ async def search_all(
     per_provider_limit: int = 8,
     since: Optional[date] = None,
     language: Optional[str] = None,
+    timeout: Optional[float] = None,
 ) -> list[SourceCandidate]:
     """Fan out search() across enabled providers matching `kinds`, concurrently.
 
@@ -106,14 +121,24 @@ async def search_all(
     if not providers:
         return []
 
+    deadline = _PROVIDER_TIMEOUT if timeout is None else timeout
+
     async def _run(p: SourceProvider) -> list[SourceCandidate]:
         try:
-            return await p.search(
-                query,
-                limit=per_provider_limit,
-                since=since,
-                language=language,
+            return await asyncio.wait_for(
+                p.search(
+                    query,
+                    limit=per_provider_limit,
+                    since=since,
+                    language=language,
+                ),
+                timeout=deadline,
             )
+        except asyncio.TimeoutError:
+            # One hung provider must not park the whole gather (see _PROVIDER_TIMEOUT).
+            log.warning("provider %s timed out after %ss; skipped",
+                        getattr(p, "name", "?"), deadline)
+            return []
         except Exception:
             return []
 

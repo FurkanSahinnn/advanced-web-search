@@ -125,6 +125,15 @@ export function useRunStream(runId: number | null): RunStreamState {
     setEvents((prev) => [...prev, ev]);
     setLastByType((prev) => ({ ...prev, [ev.type]: ev }));
 
+    // Any non-terminal trace frame means the run is alive: lift a stale
+    // "connecting" (e.g. after an EventSource reconnect that never re-delivered
+    // run_started, or an onerror blip during a long node) to "running" so the
+    // badge tracks reality. Terminal/approval states are authoritative and set
+    // by their own cases in the switch below; this only promotes "connecting".
+    if (ev.type !== "run_finished" && ev.type !== "error") {
+      setStatus((cur) => (cur === "connecting" ? "running" : cur));
+    }
+
     switch (ev.type) {
       case "run_started":
         setStatus("running");
@@ -323,7 +332,8 @@ export function useRunStream(runId: number | null): RunStreamState {
         cur === "finished" ||
         cur === "error" ||
         cur === "cancelled" ||
-        cur === "awaiting_approval"
+        cur === "awaiting_approval" ||
+        cur === "running"
           ? cur
           : "connecting",
       );

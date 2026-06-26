@@ -252,6 +252,18 @@ Then launch any time — this reads your saved environment and serves the app at
 
 Pass-through flags work, e.g. `./start.ps1 --port 9000 --no-browser`.
 
+> **First run downloads the local models.** On a fresh machine the first research run lazily
+> downloads the multilingual embedding + reranker models (~2.3 GB) from HuggingFace, so that run is
+> slower and the trace shows a *"Loading embedding model…"* line while it fetches. It is a **one-time**
+> cost — the cache lives in your data dir (`AWSEARCH_DATA_DIR`) and every later run starts in seconds.
+> To avoid the mid-run wait, let `setup` pre-download them (it offers to), or warm them up manually:
+>
+> ```bash
+> python -c "from advanced_web_search.embeddings import embedder, reranker; embedder.warm_up(); reranker.warm_up()"
+> ```
+>
+> Set `HF_TOKEN` in `.env` for faster, rate-limit-free downloads.
+
 ### Step 4 — (Optional) enable a fully-offline local model
 
 Install [Ollama](https://ollama.com), then pull a model sized to your machine (auto-detected):
@@ -378,6 +390,7 @@ A `.env` file is **completely optional** — Advanced Web Search runs with zero 
 | `AWSEARCH_SEARXNG_URL` | Optional self-hosted SearXNG instance. |
 | `OPENALEX_API_KEY` / `SEMANTIC_SCHOLAR_API_KEY` / `CORE_API_KEY` | Higher academic rate limits + extra ranking signals + OA full text. |
 | `AWSEARCH_CONTACT_EMAIL` | Polite-pool email for Crossref / Unpaywall / OpenAlex. |
+| `HF_TOKEN` | HuggingFace token — faster, rate-limit-free first-run download of the embedding + reranker models (~2.3 GB). The models are public, so this is optional; it only speeds up that one-time fetch. |
 | `AWSEARCH_HOST` / `AWSEARCH_PORT` / `AWSEARCH_DATA_DIR` / `AWSEARCH_LOG_LEVEL` | Server + storage overrides. |
 
 > ⚠️ **Never commit your real `.env`.** It is already git-ignored. If a key ever leaks, rotate it.

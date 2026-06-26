@@ -40,3 +40,40 @@ def emit(
         })
     except Exception:
         pass
+
+
+def model_load_pending(kind: str) -> Optional[str]:
+    """Return a user-facing 'loading model' notice if ``kind``'s model is not yet
+    resident (peek only — never triggers a load), else ``None``.
+
+    ``kind`` is ``"embed"`` or ``"rerank"``. The first use of either model lazily
+    loads it and, on a fresh machine, downloads weights from HuggingFace (the
+    embedder is ~2.3 GB) — a multi-minute step during which a research run
+    otherwise looks frozen with no progress. Nodes call this right before the
+    first embed/rerank to surface a ``log`` frame explaining the wait. Fully
+    defensive: any failure returns ``None`` (no notice, never raises).
+    """
+    try:
+        if kind == "embed":
+            from ..embeddings import embedder
+
+            if embedder.is_loaded():
+                return None
+            return (
+                "Loading embedding model (first use). If not cached this downloads "
+                "~2.3 GB from HuggingFace once and can take several minutes — set "
+                "HF_TOKEN for faster, rate-limit-free downloads."
+            )
+        if kind == "rerank":
+            from ..embeddings import reranker
+
+            if reranker.current_mode() is not None:
+                return None
+            return (
+                "Loading reranker model (first use). If not cached this downloads "
+                "~1 GB from HuggingFace once and can take a minute — set HF_TOKEN "
+                "for faster, rate-limit-free downloads."
+            )
+    except Exception:
+        return None
+    return None

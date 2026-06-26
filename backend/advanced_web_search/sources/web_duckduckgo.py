@@ -55,4 +55,12 @@ class DuckDuckGoProvider(SourceProvider):
     def _search_sync(query: str, limit: int) -> list[dict]:
         from ddgs import DDGS
 
-        return list(DDGS().text(query, max_results=limit) or [])
+        # ddgs runs its own (Rust primp) HTTP, OUTSIDE utils/http.py, in a
+        # non-cancellable thread. The registry's per-provider asyncio.wait_for is
+        # the hard cap, but pass an explicit tight per-request timeout so a
+        # stalled engine gives up fast and the background thread unwinds quickly
+        # instead of lingering on shutdown(wait=True). Self-bounding (returns []).
+        try:
+            return list(DDGS(timeout=5).text(query, max_results=limit) or [])
+        except Exception:
+            return []
