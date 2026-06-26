@@ -261,7 +261,10 @@ class Settings(BaseSettings):
     # configured one can't load, so vector search never silently turns off.
     embed_model: str = "intfloat/multilingual-e5-large"
     embed_dim: int = 1024
-    rerank_model: str = "Xenova/bge-reranker-base"  # fastembed-supported multilingual
+    # Multilingual cross-encoder (TR/EN). The previous default "Xenova/bge-reranker-base"
+    # is not in fastembed's registry, so it silently fell back to this same model — set it
+    # explicitly to drop the failed-load attempt (and confusing log) at startup.
+    rerank_model: str = "jinaai/jina-reranker-v2-base-multilingual"
     use_torch_models: bool = False  # opt-in to sentence-transformers/torch path
 
     # --- retrieval ---

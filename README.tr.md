@@ -119,7 +119,7 @@ advanced-web-search/
 │       │   └── fulltext.py         #   açık erişim PDF → metin çıkarımı
 │       ├── retrieval/              # tekilleştirme + sqlite-vec vektör deposu
 │       ├── scoring/                # ağırlıklı kaynak sıralayıcı (puan formülü)
-│       ├── embeddings/             # multilingual-e5-large embedder + bge-reranker (fastembed ONNX)
+│       ├── embeddings/             # multilingual-e5-large embedder + jina-reranker-v2 (fastembed ONNX)
 │       ├── llm/                    # sağlayıcı yönlendirme (Ollama/bulut) + RAM'e göre model seçimi
 │       ├── db/                     # SQLite şeması, migration'lar, repository'ler
 │       ├── models/                 # Pydantic istek/yanıt şemaları
@@ -384,7 +384,7 @@ açılışta kendini günceller. Saatlik kontrolü beklemeden hemen güncellemek
 | API | FastAPI + `sse-starlette` (`/api` altında JSON, SSE iz akışı) |
 | Orkestrasyon | LangGraph (çok-düğümlü ajan grafiği, SQLite checkpointer, HITL interrupt) |
 | LLM | LiteLLM — yerel Ollama ile bulut sağlayıcılar arasında hibrit yönlendirme |
-| Embedding / yeniden sıralama | `fastembed` ONNX: `multilingual-e5-large` embedding + `bge-reranker` (çok dilli) |
+| Embedding / yeniden sıralama | `fastembed` ONNX: `multilingual-e5-large` embedding + `jina-reranker-v2` (çok dilli) |
 | Depolama / arama | SQLite + `sqlite-vec` + FTS5, RRF ile birleştirilmiş |
 
 **Kaynak-puanlama formülü** (ağırlıklar toplamı 1 olacak şekilde normalize edilir):

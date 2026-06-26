@@ -117,7 +117,7 @@ advanced-web-search/
 │       │   └── fulltext.py         #   OA PDF → text extraction
 │       ├── retrieval/              # dedup + sqlite-vec vector store
 │       ├── scoring/                # weighted source ranker (the score formula)
-│       ├── embeddings/             # multilingual-e5-large embedder + bge-reranker (fastembed ONNX)
+│       ├── embeddings/             # multilingual-e5-large embedder + jina-reranker-v2 (fastembed ONNX)
 │       ├── llm/                    # provider routing (Ollama/cloud) + RAM-based model pick
 │       ├── db/                     # SQLite schema, migrations, repositories
 │       ├── models/                 # Pydantic request/response schemas
@@ -377,7 +377,7 @@ A `.env` file is **completely optional** — Advanced Web Search runs with zero 
 | API | FastAPI + `sse-starlette` (JSON under `/api`, SSE trace stream) |
 | Orchestration | LangGraph (multi-node agent graph, SQLite checkpointer, HITL interrupt) |
 | LLM | LiteLLM — hybrid routing between local Ollama and cloud providers |
-| Embeddings / rerank | `fastembed` ONNX: `multilingual-e5-large` embeddings + `bge-reranker` (multilingual) |
+| Embeddings / rerank | `fastembed` ONNX: `multilingual-e5-large` embeddings + `jina-reranker-v2` (multilingual) |
 | Storage / retrieval | SQLite + `sqlite-vec` + FTS5, fused with RRF |
 
 **Source-scoring formula** (weights normalized to sum to 1):
