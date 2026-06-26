@@ -71,7 +71,7 @@ re-check their own citations, and keep none of it on your machine.
 | **Ask the report** | After a run, ask follow-up questions answered **only** from that run's own sources, with inline citations (or an honest "not found"). |
 | **Multilingual** | Local `multilingual-e5-large` embeddings with strong **Turkish** support; bilingual TR/EN UI; reports can be generated in **one or several languages in parallel**. |
 | **Persistent** | Projects, runs, sources, claims and reports are saved in SQLite and revisitable — nothing is thrown away after a query. |
-| **One command, Windows-first** | `./start.ps1` (or `./start.sh`) installs, builds and launches. No curl-pipe-bash, no wizard. |
+| **Guided setup, one-command launch** | `./setup.ps1` (or `./setup.sh`) installs & builds once; then `./start.ps1` / `./start.sh` launches instantly. No curl-pipe-bash. |
 
 The reference point is **Feynman** (an arXiv-only, terminal-only, cloud-bound CLI). Advanced Web
 Search is a GUI-first, offline-capable, multi-database alternative with persistent storage and
@@ -136,7 +136,8 @@ advanced-web-search/
 ├── scripts/                        # dev.py (concurrent backend+frontend hot reload)
 ├── tests/                          # offline end-to-end graph tests (deterministic fakes)
 ├── brand/                          # logo / brand assets
-├── start.ps1 / start.sh            # one-command launchers
+├── setup.ps1 / setup.sh            # guided first-time setup (pick env, install, build SPA)
+├── start.ps1 / start.sh            # one-command launchers (after setup)
 ├── Dockerfile                      # multi-stage build (SPA + Python runtime)
 ├── docker-compose.yml              # one-command containerized deployment
 ├── .dockerignore                   # keeps the build context lean
@@ -214,10 +215,28 @@ conda create -n myenv python=3.12 -y
 conda activate myenv
 ```
 
-> If you skip this, the launcher will create a local `.venv` for you as a last resort. It will
-> **never** overwrite an active conda env — if `CONDA_PREFIX` is set, it installs into that env.
+> If you skip this, `setup` offers a local `.venv` as a fallback. Activate a conda env first and
+> `setup` will offer to install straight into that env.
 
-### Step 3 — Launch (one command)
+### Step 3 — Install once, then launch
+
+First-time setup asks how to install (conda / venv / system Python), installs the backend
+(`pip install -e .`), builds the SPA, and records your chosen interpreter in `.awsearch_env`:
+
+**Windows (PowerShell):**
+
+```powershell
+./setup.ps1
+```
+
+**macOS / Linux:**
+
+```bash
+./setup.sh
+```
+
+Then launch any time — this reads your saved environment and serves the app at
+**http://127.0.0.1:8787** (opening your browser):
 
 **Windows (PowerShell):**
 
@@ -230,10 +249,6 @@ conda activate myenv
 ```bash
 ./start.sh
 ```
-
-This single command: picks your Python environment → installs the backend in editable mode
-(`pip install -e .`) → builds the SPA if it hasn't been built (`pnpm install && pnpm build`) →
-starts the server and opens your browser at **http://127.0.0.1:8787**.
 
 Pass-through flags work, e.g. `./start.ps1 --port 9000 --no-browser`.
 

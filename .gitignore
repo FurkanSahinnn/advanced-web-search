@@ -10,6 +10,9 @@ venv/
 .pytest_cache/
 .ruff_cache/
 
+# --- Local setup state (written by setup.sh / setup.ps1) ---
+.awsearch_env
+
 # --- Node / frontend ---
 node_modules/
 frontend/dist/

@@ -49,6 +49,8 @@ scripts
 tests
 start.ps1
 start.sh
+setup.ps1
+setup.sh
 
 # --- Editor / OS / agent state ---
 .claude

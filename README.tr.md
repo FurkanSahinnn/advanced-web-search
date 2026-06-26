@@ -73,7 +73,7 @@ atıflarını nadiren yeniden denetler ve hiçbirini sizin makinenizde tutmaz.
 | **Rapora sor** | Koşudan sonra, **yalnızca** o koşunun kaynaklarından yanıtlanan (atıflı, yoksa dürüstçe "bulunamadı") takip soruları sorabilirsin. |
 | **Çok dilli** | Güçlü **Türkçe** desteğiyle yerel `multilingual-e5-large` embedding'leri; iki dilli TR/EN arayüz; raporlar **bir veya birden çok dilde paralel** üretilebilir. |
 | **Kalıcı** | Projeler, çalıştırmalar, kaynaklar, iddialar ve raporlar SQLite'ta saklanır ve tekrar açılabilir — bir sorgudan sonra hiçbir şey atılmaz. |
-| **Tek komut, Windows-öncelikli** | `./start.ps1` (veya `./start.sh`) kurar, derler ve başlatır. curl-pipe-bash yok, sihirbaz yok. |
+| **Rehberli kurulum, tek-komut başlatma** | `./setup.ps1` (veya `./setup.sh`) bir kez kurar ve derler; ardından `./start.ps1` / `./start.sh` anında başlatır. curl-pipe-bash yok. |
 
 Karşılaştırma noktası **Feynman** (yalnızca arXiv, yalnızca terminal, buluta bağımlı bir CLI).
 Advanced Web Search; kalıcı depolama ve doğrulanabilir atıflara sahip, GUI-öncelikli, çevrimdışı
@@ -138,7 +138,8 @@ advanced-web-search/
 ├── scripts/                        # dev.py (eşzamanlı backend+frontend hot reload)
 ├── tests/                          # çevrimdışı uçtan-uca grafik testleri (deterministik sahteler)
 ├── brand/                          # logo / marka varlıkları
-├── start.ps1 / start.sh            # tek-komut başlatıcılar
+├── setup.ps1 / setup.sh            # rehberli ilk kurulum (ortam seç, kur, SPA derle)
+├── start.ps1 / start.sh            # tek-komut başlatıcılar (kurulumdan sonra)
 ├── Dockerfile                      # çok-aşamalı derleme (SPA + Python runtime)
 ├── docker-compose.yml              # tek-komut konteyner dağıtımı
 ├── .dockerignore                   # derleme bağlamını yalın tutar
@@ -218,10 +219,28 @@ conda create -n myenv python=3.12 -y
 conda activate myenv
 ```
 
-> Bu adımı atlarsanız, başlatıcı son çare olarak sizin için yerel bir `.venv` oluşturur. Aktif bir
-> conda ortamının **üzerine asla yazmaz** — `CONDA_PREFIX` ayarlıysa kurulumu o ortama yapar.
+> Bu adımı atlarsanız, `setup` son çare olarak yerel bir `.venv` önerir. Önce bir conda ortamı
+> etkinleştirirseniz, `setup` doğrudan o ortama kurmayı teklif eder.
 
-### Adım 3 — Başlatın (tek komut)
+### Adım 3 — Bir kez kurun, sonra başlatın
+
+İlk kurulum nasıl kuracağınızı sorar (conda / venv / sistem Python), backend'i kurar
+(`pip install -e .`), SPA'yı derler ve seçtiğiniz yorumlayıcıyı `.awsearch_env`'e kaydeder:
+
+**Windows (PowerShell):**
+
+```powershell
+./setup.ps1
+```
+
+**macOS / Linux:**
+
+```bash
+./setup.sh
+```
+
+Ardından istediğiniz zaman başlatın — bu, kaydedilen ortamı okur ve uygulamayı
+**http://127.0.0.1:8787** adresinde açar (tarayıcınızı açarak):
 
 **Windows (PowerShell):**
 
@@ -234,10 +253,6 @@ conda activate myenv
 ```bash
 ./start.sh
 ```
-
-Bu tek komut: Python ortamınızı seçer → backend'i düzenlenebilir kipte kurar
-(`pip install -e .`) → henüz derlenmemişse SPA'yı derler (`pnpm install && pnpm build`) →
-sunucuyu başlatır ve tarayıcınızı **http://127.0.0.1:8787** adresinde açar.
 
 Geçişli bayraklar çalışır, ör. `./start.ps1 --port 9000 --no-browser`.
 
